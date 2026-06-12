@@ -1,6 +1,9 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import { runMigrations, query } from "./db.js";
+import { eventRoutes } from "./routes/eventRoutes.js";
+import { requireAuth, requireAdmin } from "./middleware/auth.js";
 
 dotenv.config();
 
@@ -14,6 +17,78 @@ app.use(cors({
 }));
 
 app.use(express.json());
+
+// Global events catalog endpoints
+app.get("/api/events", async (req, res, next) => {
+  try {
+    const result = await query("SELECT * FROM events ORDER BY start_date DESC, created_at DESC");
+    res.json({ events: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/events", requireAuth, requireAdmin, async (req, res, next) => {
+  try {
+    const { slug, name, description, banner_url, logo_url, start_date, end_date, status } = req.body;
+    if (!slug || !name) {
+      return res.status(400).json({ error: "missing_fields", message: "slug and name are required." });
+    }
+    const result = await query(
+      `INSERT INTO events (slug, name, description, banner_url, logo_url, start_date, end_date, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [slug.toLowerCase().replace(/[^a-z0-9-]/g, ""), name, description || null, banner_url || null, logo_url || null, start_date || null, end_date || null, status || "active"]
+    );
+    res.status(201).json({ event: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/events/:slug", requireAuth, requireAdmin, async (req, res, next) => {
+  try {
+    const { slug } = req.params;
+    const { name, description, banner_url, logo_url, start_date, end_date, status } = req.body;
+    const result = await query(
+      `UPDATE events
+          SET name = COALESCE($2, name),
+              description = $3,
+              banner_url = $4,
+              logo_url = $5,
+              start_date = $6,
+              end_date = $7,
+              status = COALESCE($8, status),
+              updated_at = now()
+        WHERE slug = $1
+        RETURNING *`,
+      [slug, name, description || null, banner_url || null, logo_url || null, start_date || null, end_date || null, status || null]
+    );
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: "not_found", message: `Event ${slug} not found.` });
+    }
+    res.json({ event: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/events/:slug", requireAuth, requireAdmin, async (req, res, next) => {
+  try {
+    const { slug } = req.params;
+    const result = await query("DELETE FROM events WHERE slug = $1 RETURNING id", [slug]);
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: "not_found", message: `Event ${slug} not found.` });
+    }
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Scope registration desk suite per event
+app.use("/api/events/:slug", eventRoutes);
+
 
 // In-memory mock database cache with seeder defaults
 let projectsDb = [
@@ -347,5 +422,6 @@ app.listen(PORT, async () => {
   console.log(` Cyscom Open Source API Gateway active on Port ${PORT}`);
   console.log(` Access endpoints at http://localhost:${PORT}/api/...`);
   console.log(`===================================================`);
+  await runMigrations();
   await initFromFirebase();
 });
