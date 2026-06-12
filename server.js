@@ -160,6 +160,15 @@ app.post("/api/projects", async (req, res) => {
   res.status(201).json(project);
 });
 
+app.put("/api/projects", async (req, res) => {
+  if (!Array.isArray(req.body)) {
+    return res.status(400).json({ error: "Expected an array of projects." });
+  }
+  projectsDb = req.body;
+  await syncToFirebase("projects", projectsDb);
+  res.json({ success: true, projects: projectsDb });
+});
+
 app.delete("/api/projects/:name", async (req, res) => {
   const { name } = req.params;
   projectsDb = projectsDb.filter(p => p.name !== name);
@@ -181,6 +190,15 @@ app.post("/api/hall-of-fame", async (req, res) => {
   hallOfFameDb.push(event);
   await syncToFirebase("hall_of_fame", hallOfFameDb);
   res.status(201).json(event);
+});
+
+app.put("/api/hall-of-fame", async (req, res) => {
+  if (!Array.isArray(req.body)) {
+    return res.status(400).json({ error: "Expected an array of events." });
+  }
+  hallOfFameDb = req.body;
+  await syncToFirebase("hall_of_fame", hallOfFameDb);
+  res.json({ success: true, hall_of_fame: hallOfFameDb });
 });
 
 app.delete("/api/hall-of-fame/:name", async (req, res) => {
@@ -206,6 +224,15 @@ app.post("/api/legacy", async (req, res) => {
   res.status(201).json(member);
 });
 
+app.put("/api/legacy", async (req, res) => {
+  if (!Array.isArray(req.body)) {
+    return res.status(400).json({ error: "Expected an array of members." });
+  }
+  legacyDb = req.body;
+  await syncToFirebase("legacy", legacyDb);
+  res.json({ success: true, legacy: legacyDb });
+});
+
 app.delete("/api/legacy/:name", async (req, res) => {
   const { name } = req.params;
   legacyDb = legacyDb.filter(m => m.name !== name);
@@ -229,12 +256,22 @@ app.post("/api/users", async (req, res) => {
   res.status(201).json(user);
 });
 
+app.put("/api/users", async (req, res) => {
+  if (!Array.isArray(req.body)) {
+    return res.status(400).json({ error: "Expected an array of users." });
+  }
+  adminUsersDb = req.body;
+  await syncToFirebase("admin_users", adminUsersDb);
+  res.json({ success: true, users: adminUsersDb });
+});
+
 app.delete("/api/users/:username", async (req, res) => {
   const { username } = req.params;
   adminUsersDb = adminUsersDb.filter(u => u.username.toLowerCase() !== username.toLowerCase());
   await syncToFirebase("admin_users", adminUsersDb);
   res.json({ success: true, message: `Admin user ${username} deleted.` });
 });
+
 
 // LEADERBOARD ENDPOINTS
 app.get("/api/leaderboard", (req, res) => {
