@@ -1,0 +1,19 @@
+{
+  "name": "cyscom-opensrc-api",
+  "version": "1.0.0",
+  "description": "Secure Node.js & Express API Gateway proxy for the Cyscom VIT Open Source Portal.",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
