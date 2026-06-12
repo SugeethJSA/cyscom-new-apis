@@ -113,6 +113,44 @@ const syncToFirebase = async (node, data) => {
   }
 };
 
+// Sync memory cache from remote Firebase database on startup if configured
+const initFromFirebase = async () => {
+  const fbUrl = process.env.FIREBASE_DB_URL;
+  if (!fbUrl) {
+    console.log("No FIREBASE_DB_URL configured. Using seeded default dataset.");
+    return;
+  }
+
+  try {
+    const cleanUrl = fbUrl.replace(/\/$/, "");
+    console.log(`Synchronizing cache from Firebase: ${cleanUrl}/vitcc/owasp.json ...`);
+    const res = await fetch(`${cleanUrl}/vitcc/owasp.json`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data) {
+        if (data.projects) projectsDb = data.projects;
+        if (data.hall_of_fame) hallOfFameDb = data.hall_of_fame;
+        if (data.legacy) legacyDb = data.legacy;
+        if (data.admin_users) adminUsersDb = data.admin_users;
+        if (data.templates) templatesDb = data.templates;
+        if (data.certificates) certificatesDb = data.certificates;
+        
+        // Extract leaderboard acts
+        Object.keys(data).forEach(key => {
+          if (key.startsWith("leaderboard-act")) {
+            leaderboardDb[key] = data[key];
+          }
+        });
+        console.log("Database cache fully synchronized from Firebase!");
+      }
+    } else {
+      console.warn(`Firebase response not OK (${res.status}). Using seeded defaults.`);
+    }
+  } catch (err) {
+    console.error("Failed to sync cache from Firebase on startup:", err.message);
+  }
+};
+
 // Root Health Endpoint
 app.get("/health", (req, res) => {
   res.json({
@@ -304,9 +342,10 @@ app.put("/api/leaderboard-act/:actNum", async (req, res) => {
 });
 
 // Start Express Listener
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`===================================================`);
   console.log(` Cyscom Open Source API Gateway active on Port ${PORT}`);
   console.log(` Access endpoints at http://localhost:${PORT}/api/...`);
   console.log(`===================================================`);
+  await initFromFirebase();
 });
