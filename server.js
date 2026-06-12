@@ -1,9 +1,10 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import bcrypt from "bcryptjs";
 import { runMigrations, query } from "./db.js";
 import { eventRoutes } from "./routes/eventRoutes.js";
-import { requireAuth, requireAdmin } from "./middleware/auth.js";
+import { requireAuth, requireAdmin, signUser } from "./middleware/auth.js";
 
 dotenv.config();
 
@@ -170,6 +171,99 @@ let certificatesDb = {
 
 // Full database container mock for leaderboard acts
 let leaderboardDb = {};
+
+// UNIFIED LOGIN ENDPOINT
+app.post("/api/auth/login", async (req, res, next) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: "missing_fields", message: "Username/Email and Credentials Key are required." });
+    }
+
+    // 1. Check in-memory global admin database
+    const matchedGlobal = adminUsersDb.find(u => u.username.toLowerCase() === username.trim().toLowerCase());
+    if (matchedGlobal) {
+      // In CySCOM Admin, global admin passwords are SHA-256 hashed client-side.
+      // To support unified logins securely, we accept both client-side hashed or plaintext keys.
+      const crypto = await import("crypto");
+      const enteredHash = crypto.createHash("sha256").update(password).digest("hex");
+      if (enteredHash === matchedGlobal.passwordHash || password === matchedGlobal.passwordHash) {
+        const payload = {
+          username: matchedGlobal.username,
+          role: matchedGlobal.role, // 'superadmin' or 'admin'
+          permissions: matchedGlobal.permissions || [],
+          global: true
+        };
+        return res.json({
+          token: signUser(payload),
+          user: payload
+        });
+      }
+    }
+
+    // 2. Check event-scoped users in Postgres DB (or mock fallback)
+    try {
+      const dbResult = await query("SELECT * FROM users WHERE email = $1 AND active = TRUE", [username.trim().toLowerCase()]);
+      const user = dbResult.rows[0];
+      if (user) {
+        const passwordMatch = await bcrypt.compare(password, user.password_hash);
+        if (passwordMatch) {
+          const payload = {
+            id: user.id,
+            username: user.email,
+            email: user.email,
+            name: user.name,
+            role: user.role, // 'admin' or 'volunteer'
+            event_slug: user.event_slug,
+            permissions: user.role === "admin" 
+              ? ["event_admin", "can_scan", "can_verify", "can_register", "can_view_attendees", "can_export", "can_transfer"] 
+              : ["can_scan", "can_view_attendees"],
+            global: false
+          };
+          
+          let qrDecryptKey = "Q1lTQ09NX09XQVNQX1NFQ1JFVF9LRVlfMjAyNg==";
+          try {
+            const { exportQrDecryptKey } = await import("./services/crypto.js");
+            qrDecryptKey = exportQrDecryptKey();
+          } catch (e) {
+            // keep default
+          }
+
+          return res.json({
+            token: signUser(payload),
+            user: payload,
+            qrDecryptKey
+          });
+        }
+      }
+    } catch (dbErr) {
+      console.warn("DB check failed during login, falling back to mocks:", dbErr.message);
+    }
+
+    // 3. Mock Fallback accounts for offline/demo logins
+    const cleanUser = username.trim().toLowerCase();
+    if ((cleanUser === "volunteer" || cleanUser === "vol@cyscomvit.com") && password === "cyscom2026") {
+      const payload = {
+        username: "volunteer",
+        email: "vol@cyscomvit.com",
+        name: "Mock Volunteer",
+        role: "volunteer",
+        event_slug: "amaze-2026",
+        permissions: ["can_scan", "can_view_attendees"],
+        global: false
+      };
+      return res.json({
+        token: signUser(payload),
+        user: payload,
+        qrDecryptKey: "Q1lTQ09NX09XQVNQX1NFQ1JFVF9LRVlfMjAyNg=="
+      });
+    }
+
+    return res.status(401).json({ error: "invalid_credentials", message: "Invalid credentials." });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Helper to push update to remote Firebase database if configured
 const syncToFirebase = async (node, data) => {
