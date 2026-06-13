@@ -49,7 +49,8 @@ const mockStorage = {
     { id: "r1", rule_name: "Single Entry Checkpoint", station: "entry", validation_logic: '{"limit": 1}', active: true, event_slug: "amaze-2026" }
   ],
   scan_events: [],
-  system_settings: []
+  system_settings: [],
+  recruitments: []
 };
 
 export async function query(text, params) {
@@ -72,6 +73,8 @@ export async function query(text, params) {
       rows = mockStorage.scan_events;
     } else if (lowerText.includes("from system_settings")) {
       rows = mockStorage.system_settings;
+    } else if (lowerText.includes("from recruitments")) {
+      rows = mockStorage.recruitments;
     }
     
     // Simulating updates/inserts
@@ -98,8 +101,11 @@ export async function query(text, params) {
       const newCat = { id: Math.random().toString(), name: params[0], color: params[1], station_permissions: params[2], active: true, event_slug: params[3] };
       mockStorage.user_categories.push(newCat);
       rows = [newCat];
+    } else if (lowerText.includes("insert into recruitments")) {
+      const newRecruitment = { id: Math.random().toString(), name: params[0], email: params[1], phone: params[2], reg_number: params[3], department_primary: params[4], department_secondary: params[5], skills: params[6], motivation: params[7], contribution: params[8], status: "pending", score: 0, created_at: new Date() };
+      mockStorage.recruitments.push(newRecruitment);
+      rows = [newRecruitment];
     }
-    
     return { rows };
   }
   return pool.query(text, params);

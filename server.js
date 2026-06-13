@@ -4,7 +4,9 @@ import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import { runMigrations, query } from "./db.js";
 import { eventRoutes } from "./routes/eventRoutes.js";
-import { requireAuth, requireAdmin, signUser } from "./middleware/auth.js";
+import { intakeRoutes } from "./routes/intakeRoutes.js";
+import { requireAuth, requireAdmin, requireSuperAdmin, requirePermission, signUser } from "./middleware/auth.js";
+import { recruitmentsRoutes } from "./routes/recruitmentsRoutes.js";
 
 dotenv.config();
 
@@ -29,7 +31,7 @@ app.get("/api/events", async (req, res, next) => {
   }
 });
 
-app.post("/api/events", requireAuth, requireAdmin, async (req, res, next) => {
+app.post("/api/events", requireAuth, requirePermission('manage_events'), async (req, res, next) => {
   try {
     const { slug, name, description, banner_url, logo_url, start_date, end_date, status } = req.body;
     if (!slug || !name) {
@@ -47,7 +49,7 @@ app.post("/api/events", requireAuth, requireAdmin, async (req, res, next) => {
   }
 });
 
-app.put("/api/events/:slug", requireAuth, requireAdmin, async (req, res, next) => {
+app.put("/api/events/:slug", requireAuth, requirePermission('manage_events'), async (req, res, next) => {
   try {
     const { slug } = req.params;
     const { name, description, banner_url, logo_url, start_date, end_date, status } = req.body;
@@ -74,7 +76,7 @@ app.put("/api/events/:slug", requireAuth, requireAdmin, async (req, res, next) =
   }
 });
 
-app.delete("/api/events/:slug", requireAuth, requireAdmin, async (req, res, next) => {
+app.delete("/api/events/:slug", requireAuth, requirePermission('manage_events'), async (req, res, next) => {
   try {
     const { slug } = req.params;
     const result = await query("DELETE FROM events WHERE slug = $1 RETURNING id", [slug]);
@@ -90,6 +92,11 @@ app.delete("/api/events/:slug", requireAuth, requireAdmin, async (req, res, next
 // Scope registration desk suite per event
 app.use("/api/events/:slug", eventRoutes);
 
+// Scope intake process
+app.use("/api/intake", intakeRoutes);
+
+// Scope recruitments process
+app.use("/api/recruitments", recruitmentsRoutes);
 
 // In-memory mock database cache with seeder defaults
 let projectsDb = [
@@ -138,8 +145,9 @@ let adminUsersDb = [
   {
     username: "admin",
     passwordHash: "0eb6186d3ac869f24f085c46aee1614cfeccab8008f1294b908a85bdbaefd602", // sha256("cyscom2026")
-    role: "superadmin",
-    permissions: ["manage_users", "manage_projects", "manage_certificates", "manage_leaderboard", "manage_hall_of_fame", "manage_legacy"]
+    role: ["superadmin"],
+    permissions: ["manage_users", "manage_projects", "manage_certificates", "manage_leaderboard", "manage_hall_of_fame", "manage_legacy", "manage_events", "manage_intake"],
+    departments: ["dev", "con", "tec", "des", "soc", "eve"]
   }
 ];
 
@@ -190,8 +198,9 @@ app.post("/api/auth/login", async (req, res, next) => {
       if (enteredHash === matchedGlobal.passwordHash || password === matchedGlobal.passwordHash) {
         const payload = {
           username: matchedGlobal.username,
-          role: matchedGlobal.role, // 'superadmin' or 'admin'
+          role: matchedGlobal.role, // array of roles, e.g., ['superadmin'] or ['admin']
           permissions: matchedGlobal.permissions || [],
+          departments: matchedGlobal.departments || [],
           global: true
         };
         return res.json({
@@ -213,7 +222,8 @@ app.post("/api/auth/login", async (req, res, next) => {
             username: user.email,
             email: user.email,
             name: user.name,
-            role: user.role, // 'admin' or 'volunteer'
+            role: [user.role], // 'admin' or 'volunteer'
+            departments: user.departments || [],
             event_slug: user.event_slug,
             permissions: user.role === "admin" 
               ? ["event_admin", "can_scan", "can_verify", "can_register", "can_view_attendees", "can_export", "can_transfer"] 
@@ -247,7 +257,8 @@ app.post("/api/auth/login", async (req, res, next) => {
         username: "volunteer",
         email: "vol@cyscomvit.com",
         name: "Mock Volunteer",
-        role: "volunteer",
+        role: ["volunteer"],
+        departments: ["eve"],
         event_slug: "amaze-2026",
         permissions: ["can_scan", "can_view_attendees"],
         global: false
@@ -334,7 +345,7 @@ app.get("/api/templates", (req, res) => {
   res.json(templatesDb);
 });
 
-app.put("/api/templates", async (req, res) => {
+app.put("/api/templates", requireAuth, requirePermission('manage_certificates'), async (req, res) => {
   templatesDb = req.body;
   await syncToFirebase("templates", templatesDb);
   res.json({ success: true, templates: templatesDb });
@@ -345,7 +356,7 @@ app.get("/api/certificates", (req, res) => {
   res.json(certificatesDb);
 });
 
-app.put("/api/certificates", async (req, res) => {
+app.put("/api/certificates", requireAuth, requirePermission('manage_certificates'), async (req, res) => {
   certificatesDb = req.body;
   await syncToFirebase("certificates", certificatesDb);
   res.json({ success: true, certificates: certificatesDb });
@@ -356,7 +367,7 @@ app.get("/api/projects", (req, res) => {
   res.json(projectsDb);
 });
 
-app.post("/api/projects", async (req, res) => {
+app.post("/api/projects", requireAuth, requirePermission('manage_projects'), async (req, res) => {
   const project = req.body;
   if (!project.name) {
     return res.status(400).json({ error: "Missing project name." });
@@ -367,7 +378,7 @@ app.post("/api/projects", async (req, res) => {
   res.status(201).json(project);
 });
 
-app.put("/api/projects", async (req, res) => {
+app.put("/api/projects", requireAuth, requirePermission('manage_projects'), async (req, res) => {
   if (!Array.isArray(req.body)) {
     return res.status(400).json({ error: "Expected an array of projects." });
   }
@@ -376,7 +387,7 @@ app.put("/api/projects", async (req, res) => {
   res.json({ success: true, projects: projectsDb });
 });
 
-app.delete("/api/projects/:name", async (req, res) => {
+app.delete("/api/projects/:name", requireAuth, requirePermission('manage_projects'), async (req, res) => {
   const { name } = req.params;
   projectsDb = projectsDb.filter(p => p.name !== name);
   await syncToFirebase("projects", projectsDb);
@@ -388,7 +399,7 @@ app.get("/api/hall-of-fame", (req, res) => {
   res.json(hallOfFameDb);
 });
 
-app.post("/api/hall-of-fame", async (req, res) => {
+app.post("/api/hall-of-fame", requireAuth, requirePermission('manage_hall_of_fame'), async (req, res) => {
   const event = req.body;
   if (!event.eventName) {
     return res.status(400).json({ error: "Missing event name." });
@@ -399,7 +410,7 @@ app.post("/api/hall-of-fame", async (req, res) => {
   res.status(201).json(event);
 });
 
-app.put("/api/hall-of-fame", async (req, res) => {
+app.put("/api/hall-of-fame", requireAuth, requirePermission('manage_hall_of_fame'), async (req, res) => {
   if (!Array.isArray(req.body)) {
     return res.status(400).json({ error: "Expected an array of events." });
   }
@@ -408,7 +419,7 @@ app.put("/api/hall-of-fame", async (req, res) => {
   res.json({ success: true, hall_of_fame: hallOfFameDb });
 });
 
-app.delete("/api/hall-of-fame/:name", async (req, res) => {
+app.delete("/api/hall-of-fame/:name", requireAuth, requirePermission('manage_hall_of_fame'), async (req, res) => {
   const { name } = req.params;
   hallOfFameDb = hallOfFameDb.filter(e => e.eventName !== name);
   await syncToFirebase("hall_of_fame", hallOfFameDb);
@@ -420,7 +431,7 @@ app.get("/api/legacy", (req, res) => {
   res.json(legacyDb);
 });
 
-app.post("/api/legacy", async (req, res) => {
+app.post("/api/legacy", requireAuth, requirePermission('manage_legacy'), async (req, res) => {
   const member = req.body;
   if (!member.name) {
     return res.status(400).json({ error: "Missing member name." });
@@ -431,7 +442,7 @@ app.post("/api/legacy", async (req, res) => {
   res.status(201).json(member);
 });
 
-app.put("/api/legacy", async (req, res) => {
+app.put("/api/legacy", requireAuth, requirePermission('manage_legacy'), async (req, res) => {
   if (!Array.isArray(req.body)) {
     return res.status(400).json({ error: "Expected an array of members." });
   }
@@ -440,7 +451,7 @@ app.put("/api/legacy", async (req, res) => {
   res.json({ success: true, legacy: legacyDb });
 });
 
-app.delete("/api/legacy/:name", async (req, res) => {
+app.delete("/api/legacy/:name", requireAuth, requirePermission('manage_legacy'), async (req, res) => {
   const { name } = req.params;
   legacyDb = legacyDb.filter(m => m.name !== name);
   await syncToFirebase("legacy", legacyDb);
@@ -452,7 +463,7 @@ app.get("/api/users", (req, res) => {
   res.json(adminUsersDb);
 });
 
-app.post("/api/users", async (req, res) => {
+app.post("/api/users", requireAuth, requireSuperAdmin, async (req, res) => {
   const user = req.body;
   if (!user.username) {
     return res.status(400).json({ error: "Missing username." });
@@ -463,7 +474,7 @@ app.post("/api/users", async (req, res) => {
   res.status(201).json(user);
 });
 
-app.put("/api/users", async (req, res) => {
+app.put("/api/users", requireAuth, requireSuperAdmin, async (req, res) => {
   if (!Array.isArray(req.body)) {
     return res.status(400).json({ error: "Expected an array of users." });
   }
@@ -472,7 +483,7 @@ app.put("/api/users", async (req, res) => {
   res.json({ success: true, users: adminUsersDb });
 });
 
-app.delete("/api/users/:username", async (req, res) => {
+app.delete("/api/users/:username", requireAuth, requireSuperAdmin, async (req, res) => {
   const { username } = req.params;
   adminUsersDb = adminUsersDb.filter(u => u.username.toLowerCase() !== username.toLowerCase());
   await syncToFirebase("admin_users", adminUsersDb);

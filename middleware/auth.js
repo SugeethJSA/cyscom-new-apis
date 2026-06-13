@@ -22,8 +22,59 @@ export function requireAuth(req, res, next) {
 }
 
 export function requireAdmin(req, res, next) {
-  if (req.user?.role !== "admin" && req.user?.role !== "superadmin") {
+  const roles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role].filter(Boolean);
+  if (!roles.includes("admin") && !roles.includes("superadmin")) {
     return res.status(403).json({ error: "admin_required", message: "Admin access is required." });
   }
   return next();
+}
+
+export function requireSuperAdmin(req, res, next) {
+  const roles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role].filter(Boolean);
+  if (!roles.includes("superadmin")) {
+    return res.status(403).json({ error: "superadmin_required", message: "Superadmin access is required." });
+  }
+  return next();
+}
+
+export function requirePermission(permission) {
+  return (req, res, next) => {
+    const roles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role].filter(Boolean);
+    const permissions = req.user?.permissions || [];
+    
+    // Superadmins override everything
+    if (roles.includes("superadmin")) {
+      return next();
+    }
+    
+    // Check if user has specific permission
+    if (permissions.includes(permission)) {
+      return next();
+    }
+    
+    return res.status(403).json({ 
+      error: "permission_denied", 
+      message: `Access denied. Requires '${permission}' permission or Superadmin role.` 
+    });
+  };
+}
+
+export function requireDepartment(department) {
+  return (req, res, next) => {
+    const roles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role].filter(Boolean);
+    const depts = Array.isArray(req.user?.departments) ? req.user.departments : [req.user?.department].filter(Boolean);
+    
+    if (roles.includes("superadmin")) {
+      return next();
+    }
+    
+    if (depts.includes(department)) {
+      return next();
+    }
+    
+    return res.status(403).json({ 
+      error: "department_denied", 
+      message: `Access denied. Requires access to department '${department}'.` 
+    });
+  };
 }
