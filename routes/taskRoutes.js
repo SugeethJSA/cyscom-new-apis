@@ -136,3 +136,46 @@ taskRoutes.get("/users/:dept", requireAuth, async (req, res, next) => {
     next(error);
   }
 });
+
+// Get task comments
+taskRoutes.get("/:id/comments", requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const commentsRes = await query(`
+      SELECT tc.*, u.name as user_name 
+      FROM task_comments tc
+      LEFT JOIN users u ON tc.user_id = u.id
+      WHERE tc.task_id = $1
+      ORDER BY tc.created_at ASC
+    `, [id]);
+    res.json({ comments: commentsRes.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Post a task comment/update
+taskRoutes.post("/:id/comments", requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { comment, link_url } = req.body;
+    const userId = req.user?.id || null;
+
+    if (!comment && !link_url) {
+      return res.status(400).json({ error: "missing_fields", message: "Comment or link is required." });
+    }
+
+    const commentRes = await query(`
+      INSERT INTO task_comments (task_id, user_id, comment, link_url)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `, [id, userId, comment || "", link_url || null]);
+
+    const newComment = commentRes.rows[0];
+    newComment.user_name = req.user?.name || req.user?.username;
+
+    res.status(201).json({ success: true, comment: newComment });
+  } catch (error) {
+    next(error);
+  }
+});

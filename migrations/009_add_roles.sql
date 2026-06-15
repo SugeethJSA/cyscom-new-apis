@@ -1,0 +1,3 @@
+ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'superadmin';
+ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'core';
+ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'member';

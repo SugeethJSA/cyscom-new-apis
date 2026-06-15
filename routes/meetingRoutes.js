@@ -7,12 +7,18 @@ export const meetingRoutes = Router();
 // Get all meetings
 meetingRoutes.get("/", requireAuth, async (req, res, next) => {
   try {
+    const userId = req.user?.id || null;
+    
     const meetingsRes = await query(`
-      SELECT m.*, u.name as created_by_name 
+      SELECT 
+        m.*, 
+        u.name as created_by_name,
+        (SELECT COUNT(*) FROM meeting_rsvps WHERE meeting_id = m.id AND status = 'attending') as rsvp_count,
+        (SELECT status FROM meeting_rsvps WHERE meeting_id = m.id AND user_id = $1) as user_rsvp_status
       FROM meetings m
       LEFT JOIN users u ON m.created_by = u.id
       ORDER BY m.date ASC, m.time ASC
-    `);
+    `, [userId]);
 
     res.json({ meetings: meetingsRes.rows });
   } catch (error) {
@@ -90,6 +96,28 @@ meetingRoutes.delete("/:id", requireAuth, async (req, res, next) => {
     }
 
     res.json({ success: true, message: "Meeting deleted." });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// RSVP to a meeting
+meetingRoutes.post("/:id/rsvp", requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body; // 'attending', 'declined'
+    const userId = req.user?.id;
+
+    if (!userId) return res.status(401).json({ error: "unauthorized", message: "Must be logged in to RSVP" });
+
+    await query(`
+      INSERT INTO meeting_rsvps (meeting_id, user_id, status)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (meeting_id, user_id) 
+      DO UPDATE SET status = EXCLUDED.status, created_at = CURRENT_TIMESTAMP
+    `, [id, userId, status || 'attending']);
+
+    res.json({ success: true, message: "RSVP updated successfully." });
   } catch (error) {
     next(error);
   }
