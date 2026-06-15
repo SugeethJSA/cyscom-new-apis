@@ -1,0 +1,96 @@
+import { Router } from "express";
+import { query } from "../db.js";
+import { requireAuth } from "../middleware/auth.js";
+
+export const meetingRoutes = Router();
+
+// Get all meetings
+meetingRoutes.get("/", requireAuth, async (req, res, next) => {
+  try {
+    const meetingsRes = await query(`
+      SELECT m.*, u.name as created_by_name 
+      FROM meetings m
+      LEFT JOIN users u ON m.created_by = u.id
+      ORDER BY m.date ASC, m.time ASC
+    `);
+
+    res.json({ meetings: meetingsRes.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Create a new meeting
+meetingRoutes.post("/", requireAuth, async (req, res, next) => {
+  try {
+    const { title, date, time, department, location } = req.body;
+    
+    if (!title || !date || !time) {
+      return res.status(400).json({ error: "missing_fields", message: "Title, date, and time are required." });
+    }
+
+    const userId = req.user?.id || null;
+
+    const meetingRes = await query(`
+      INSERT INTO meetings (title, date, time, department, location, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [title, date, time, department || 'all', location || '', userId]);
+
+    res.status(201).json({ 
+      success: true, 
+      meeting: { ...meetingRes.rows[0], created_by_name: req.user?.name || req.user?.username } 
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Update a meeting
+meetingRoutes.put("/:id", requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { title, date, time, department, location } = req.body;
+
+    const meetRes = await query(`SELECT * FROM meetings WHERE id = $1`, [id]);
+    if (meetRes.rows.length === 0) return res.status(404).json({ error: "not_found", message: "Meeting not found." });
+    
+    // Check if user is admin or creator
+    const isCoreOrSuper = req.user?.role?.includes("core") || req.user?.role?.includes("superadmin") || req.user?.global;
+    if (!isCoreOrSuper && meetRes.rows[0].created_by !== req.user.id) {
+      return res.status(403).json({ error: "forbidden", message: "Not authorized to edit this meeting." });
+    }
+
+    const updateRes = await query(`
+      UPDATE meetings 
+      SET title = COALESCE($1, title),
+          date = COALESCE($2, date),
+          time = COALESCE($3, time),
+          department = COALESCE($4, department),
+          location = COALESCE($5, location),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $6 RETURNING *
+    `, [title, date, time, department, location, id]);
+
+    res.json({ success: true, meeting: { ...updateRes.rows[0], created_by_name: req.user?.name || req.user?.username } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Delete a meeting
+meetingRoutes.delete("/:id", requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const deleteRes = await query(`DELETE FROM meetings WHERE id = $1 RETURNING *`, [id]);
+    
+    if (deleteRes.rows.length === 0) {
+      return res.status(404).json({ error: "not_found", message: "Meeting not found." });
+    }
+
+    res.json({ success: true, message: "Meeting deleted." });
+  } catch (error) {
+    next(error);
+  }
+});

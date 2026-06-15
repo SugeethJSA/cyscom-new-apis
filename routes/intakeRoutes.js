@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { query } from "../db.js";
-import { requireAuth, requireDepartment, requirePermission } from "../middleware/auth.js";
+import { requireAuth } from "../middleware/auth.js";
 
 export const intakeRoutes = Router();
 
@@ -9,29 +9,23 @@ export const intakeRoutes = Router();
 intakeRoutes.get("/candidates", requireAuth, async (req, res, next) => {
   try {
     const roles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role].filter(Boolean);
-    const permissions = req.user?.permissions || [];
-    const depts = Array.isArray(req.user?.departments) ? req.user.departments : [req.user?.department].filter(Boolean);
+    const mergedPerms = req.user?.merged_permissions || { hubs: {} };
+    const memHubPerms = mergedPerms.hubs?.members || [];
 
     let dbQuery = `SELECT * FROM recruitments ORDER BY created_at DESC`;
     let values = [];
     
-    // If not superadmin or manage_intake, filter by department
-    if (!roles.includes("superadmin") && !permissions.includes("manage_intake")) {
-        if (depts.length === 0) {
-            return res.json({ candidates: [] }); // No departments access
-        }
-        dbQuery = `SELECT * FROM recruitments WHERE department_primary = ANY($1) ORDER BY created_at DESC`;
-        values = [depts];
+    // If not superadmin or manage_intake, they have NO access to candidate lists across departments since we don't map by dept anymore,
+    // OR we just allow them if they have "manage_intake" or "*"
+    if (!roles.includes("superadmin") && !memHubPerms.includes("manage_intake") && !memHubPerms.includes("*") && !roles.includes("interviewer")) {
+        // Without granular dept access, just deny them
+        return res.json({ candidates: [] });
     }
 
     const result = await query(dbQuery, values);
     const candidates = result.rows.map(row => ({
-      id: row.id,
-      name: row.name,
-      email: row.email,
-      dept: row.department_primary,
-      status: row.status || 'pending',
-      score: row.score || 0
+      ...row,
+      dept: row.department_primary, // Keep for backward compatibility with older components
     }));
 
     res.json({ candidates });
@@ -55,13 +49,11 @@ intakeRoutes.put("/candidates/:id", requireAuth, async (req, res, next) => {
     const candidateDept = candidateRes.rows[0].department_primary;
 
     const roles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role].filter(Boolean);
-    const permissions = req.user?.permissions || [];
-    const depts = Array.isArray(req.user?.departments) ? req.user.departments : [req.user?.department].filter(Boolean);
+    const mergedPerms = req.user?.merged_permissions || { hubs: {} };
+    const memHubPerms = mergedPerms.hubs?.members || [];
 
-    if (!roles.includes("superadmin") && !permissions.includes("manage_intake")) {
-        if (!depts.includes(candidateDept)) {
-            return res.status(403).json({ error: "forbidden", message: "You cannot update candidates in this department." });
-        }
+    if (!roles.includes("superadmin") && !memHubPerms.includes("manage_intake") && !memHubPerms.includes("*") && !roles.includes("interviewer")) {
+        return res.status(403).json({ error: "forbidden", message: "You do not have permission to update candidates." });
     }
 
     // Update in postgres
@@ -90,15 +82,107 @@ intakeRoutes.put("/candidates/:id", requireAuth, async (req, res, next) => {
 
     res.json({
       message: "Candidate updated successfully.",
-      candidate: {
-        id: updatedCandidate.id,
-        name: updatedCandidate.name,
-        email: updatedCandidate.email,
-        dept: updatedCandidate.department_primary,
-        status: updatedCandidate.status,
-        score: updatedCandidate.score
-      }
+      candidate: { ...updatedCandidate, dept: updatedCandidate.department_primary }
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get Intake Settings (Stages, Competencies, Form Schema)
+intakeRoutes.get("/settings", async (req, res, next) => {
+  try {
+    const settingsRes = await query(`
+      SELECT setting_key, setting_value 
+      FROM system_settings 
+      WHERE setting_key IN ('intake_stages', 'intake_competencies', 'intake_form_schema')
+    `);
+    
+    const settings = {
+      stages: ["pending", "review", "accepted", "rejected"],
+      competencies: [],
+      form_schema: []
+    };
+
+    settingsRes.rows.forEach(row => {
+      if (row.setting_key === 'intake_stages') settings.stages = row.setting_value;
+      if (row.setting_key === 'intake_competencies') settings.competencies = row.setting_value;
+      if (row.setting_key === 'intake_form_schema') settings.form_schema = row.setting_value;
+    });
+
+    res.json(settings);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Update Intake Settings (Superadmin only)
+intakeRoutes.put("/settings", requireAuth, async (req, res, next) => {
+  try {
+    const roles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role].filter(Boolean);
+    if (!roles.includes("superadmin")) {
+      return res.status(403).json({ error: "forbidden", message: "Only superadmins can update intake settings." });
+    }
+
+    const { stages, competencies, form_schema } = req.body;
+
+    // Run updates in parallel
+    const promises = [];
+    if (stages) {
+      promises.push(query(`UPDATE system_settings SET setting_value = $1::jsonb WHERE setting_key = 'intake_stages'`, [JSON.stringify(stages)]));
+    }
+    if (competencies) {
+      promises.push(query(`UPDATE system_settings SET setting_value = $1::jsonb WHERE setting_key = 'intake_competencies'`, [JSON.stringify(competencies)]));
+    }
+    if (form_schema) {
+      promises.push(query(`UPDATE system_settings SET setting_value = $1::jsonb WHERE setting_key = 'intake_form_schema'`, [JSON.stringify(form_schema)]));
+    }
+
+    await Promise.all(promises);
+
+    res.json({ message: "Settings updated successfully" });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get comments for a candidate
+intakeRoutes.get("/candidates/:id/comments", requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    // Assume access control is checked via the UI or could be strict here.
+    const commentsRes = await query(`
+      SELECT * FROM recruitment_comments 
+      WHERE recruitment_id = $1 
+      ORDER BY created_at ASC
+    `, [id]);
+    
+    res.json({ comments: commentsRes.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Add a comment to a candidate
+intakeRoutes.post("/candidates/:id/comments", requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { comment, ratings, stage } = req.body;
+    
+    if (!comment) {
+      return res.status(400).json({ error: "missing_fields", message: "Comment is required." });
+    }
+
+    const authorId = req.user?.id || null;
+    const authorName = req.user?.username || req.user?.email || "Unknown Reviewer";
+
+    const insertRes = await query(`
+      INSERT INTO recruitment_comments (recruitment_id, author_id, author_name, comment, ratings, stage)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [id, authorId, authorName, comment, JSON.stringify(ratings || {}), stage || 'pending']);
+
+    res.status(201).json({ success: true, comment: insertRes.rows[0] });
   } catch (error) {
     next(error);
   }

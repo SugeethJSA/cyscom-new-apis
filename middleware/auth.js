@@ -59,22 +59,55 @@ export function requirePermission(permission) {
   };
 }
 
-export function requireDepartment(department) {
+export function requireHubAccess(hub, tab) {
   return (req, res, next) => {
     const roles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role].filter(Boolean);
-    const depts = Array.isArray(req.user?.departments) ? req.user.departments : [req.user?.department].filter(Boolean);
-    
     if (roles.includes("superadmin")) {
       return next();
     }
     
-    if (depts.includes(department)) {
+    const perms = req.user?.merged_permissions || {};
+    const hubPerms = perms.hubs?.[hub] || [];
+    
+    if (hubPerms.includes("*") || hubPerms.includes(tab)) {
       return next();
     }
     
     return res.status(403).json({ 
-      error: "department_denied", 
-      message: `Access denied. Requires access to department '${department}'.` 
+      error: "hub_access_denied", 
+      message: `Access denied. Requires '${tab}' access in '${hub}' hub.` 
+    });
+  };
+}
+
+export function requireEventAccess(capability = null) {
+  return (req, res, next) => {
+    const roles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role].filter(Boolean);
+    if (roles.includes("superadmin")) {
+      return next();
+    }
+
+    const perms = req.user?.merged_permissions?.events || {};
+    const slug = req.params.slug;
+    if (!slug) return next();
+
+    const eventPerms = perms["*"] || perms[slug];
+    if (eventPerms) {
+      if (!capability) return next(); // Just needs basic event access
+      
+      if (Array.isArray(eventPerms) && (eventPerms.includes("*") || eventPerms.includes(capability))) {
+        return next();
+      }
+      
+      return res.status(403).json({
+        error: "event_capability_denied",
+        message: `Access denied. Missing capability '${capability}' for event '${slug}'.`
+      });
+    }
+
+    return res.status(403).json({
+      error: "event_access_denied",
+      message: `Access denied. You do not have permission for event '${slug}'.`
     });
   };
 }

@@ -29,6 +29,34 @@ eventRoutes.get("/", async (req, res, next) => {
   }
 });
 
+// AUTH/ADMIN: Update Event Branding & Info
+eventRoutes.put("/", requireAuth, requireAdmin, async (req, res, next) => {
+  try {
+    const { slug } = req.params;
+    const { name, description, logo_url, banner_url } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ error: "missing_fields", message: "Event Display Title is required." });
+    }
+
+    const result = await query(
+      `UPDATE events 
+       SET name = $1, description = $2, logo_url = $3, banner_url = $4, updated_at = CURRENT_TIMESTAMP
+       WHERE slug = $5
+       RETURNING *`,
+      [name, description || null, logo_url || null, banner_url || null, slug]
+    );
+
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: "not_found", message: "Event not found." });
+    }
+
+    res.json({ event: result.rows[0], message: "Event updated successfully." });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // AUTH: Login scoped per event
 eventRoutes.post("/auth/login", async (req, res, next) => {
   try {
@@ -45,7 +73,7 @@ eventRoutes.post("/auth/login", async (req, res, next) => {
               uc.station_permissions AS category_stations
          FROM users u
          LEFT JOIN user_categories uc ON uc.id = u.category_id AND uc.active = TRUE AND uc.event_slug = $2
-        WHERE u.email = $1 AND u.active = TRUE AND u.event_slug = $2`,
+        WHERE u.email = $1 AND u.active = TRUE AND ($2 = ANY(u.allowed_events) OR '*' = ANY(u.allowed_events))`,
       [input.email, slug]
     );
     const user = result.rows[0];
@@ -65,7 +93,7 @@ eventRoutes.post("/auth/login", async (req, res, next) => {
       capabilities.can_view_attendees = true;
     }
 
-    const signedUser = { id: user.id, email: user.email, name: user.name, role: user.role, event_slug: slug };
+    const signedUser = { id: user.id, email: user.email, name: user.name, role: user.role, allowed_events: user.allowed_events || [] };
     return res.json({
       token: signUser(signedUser),
       user: signedUser,
@@ -73,155 +101,6 @@ eventRoutes.post("/auth/login", async (req, res, next) => {
       capabilities,
       categoryName: user.category_name ?? null
     });
-  } catch (error) {
-    return next(error);
-  }
-});
-
-// USERS CRUD per event
-eventRoutes.get("/auth/users", requireAuth, requireAdmin, async (req, res, next) => {
-  try {
-    const { slug } = req.params;
-    const result = await query(
-      `SELECT u.id,
-              u.name,
-              u.email,
-              u.role,
-              u.active,
-              u.category_id AS "categoryId",
-              uc.name AS "categoryName",
-              uc.color AS "categoryColor",
-              COALESCE(v.station_permissions, ARRAY[]::station_type[])::text[] AS stations,
-              u.created_at AS "createdAt"
-         FROM users u
-         LEFT JOIN LATERAL (
-           SELECT station_permissions
-             FROM volunteer_keys
-            WHERE user_id = u.id
-              AND revoked_at IS NULL
-              AND event_slug = $1
-            ORDER BY created_at DESC
-            LIMIT 1
-         ) v ON TRUE
-         LEFT JOIN user_categories uc ON uc.id = u.category_id AND uc.event_slug = $1
-        WHERE u.event_slug = $1
-        ORDER BY u.created_at DESC`,
-      [slug]
-    );
-    res.json({
-      users: result.rows,
-      scopes: ["entry", "food", "kit", "custom"]
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-eventRoutes.post("/auth/users", requireAuth, requireAdmin, async (req, res, next) => {
-  try {
-    const { slug } = req.params;
-    const input = z.object({
-      name: z.string().min(1),
-      email: z.string().email(),
-      password: z.string().min(8),
-      role: z.enum(["admin", "volunteer"]),
-      stations: z.array(z.enum(["entry", "food", "kit", "custom"])).default([]),
-      categoryId: z.string().uuid().nullable().optional()
-    }).parse(req.body);
-
-    let stations = input.stations;
-    if (input.categoryId) {
-      const catResult = await query("SELECT station_permissions FROM user_categories WHERE id = $1 AND active = TRUE AND event_slug = $2", [input.categoryId, slug]);
-      if (catResult.rows[0]) {
-        stations = catResult.rows[0].station_permissions;
-      }
-    }
-
-    const passwordHash = await bcrypt.hash(input.password, 12);
-    const result = await query(
-      "INSERT INTO users (name, email, password_hash, role, category_id, event_slug) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role, active, category_id AS \"categoryId\"",
-      [input.name, input.email, passwordHash, input.role, input.categoryId ?? null, slug]
-    );
-
-    if (input.role === "volunteer") {
-      await query(
-        "INSERT INTO volunteer_keys (user_id, key_label, public_hint, station_permissions, event_slug) VALUES ($1, $2, $3, $4::station_type[], $5)",
-        [result.rows[0].id, "default", "managed-by-admin", stations, slug]
-      );
-    }
-
-    res.status(201).json({ user: result.rows[0] });
-  } catch (error) {
-    next(error);
-  }
-});
-
-eventRoutes.put("/auth/users/:id", requireAuth, requireAdmin, async (req, res, next) => {
-  try {
-    const { slug } = req.params;
-    const input = z.object({
-      name: z.string().min(1),
-      email: z.string().email(),
-      password: z.string().min(8).optional().or(z.literal("")),
-      role: z.enum(["admin", "volunteer"]),
-      active: z.boolean(),
-      stations: z.array(z.enum(["entry", "food", "kit", "custom"])).default([]),
-      categoryId: z.string().uuid().nullable().optional()
-    }).parse(req.body);
-
-    let stations = input.stations;
-    if (input.categoryId && stations.length === 0) {
-      const catResult = await query("SELECT station_permissions FROM user_categories WHERE id = $1 AND active = TRUE AND event_slug = $2", [input.categoryId, slug]);
-      if (catResult.rows[0]) {
-        stations = catResult.rows[0].station_permissions;
-      }
-    }
-
-    const passwordHash = input.password ? await bcrypt.hash(input.password, 12) : null;
-    const result = await query(
-      `UPDATE users
-          SET name = $3,
-              email = $4,
-              role = $5,
-              active = $6,
-              password_hash = COALESCE($7, password_hash),
-              category_id = $8
-        WHERE id = $1 AND event_slug = $2
-        RETURNING id, name, email, role, active, category_id AS "categoryId"`,
-      [req.params.id, slug, input.name, input.email, input.role, input.active, passwordHash, input.categoryId ?? null]
-    );
-
-    if (!result.rows[0]) {
-      return res.status(404).json({ error: "not_found", message: "User not found." });
-    }
-
-    await query("UPDATE volunteer_keys SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL AND event_slug = $2", [req.params.id, slug]);
-    if (input.role === "volunteer") {
-      await query(
-        "INSERT INTO volunteer_keys (user_id, key_label, public_hint, station_permissions, event_slug) VALUES ($1, $2, $3, $4::station_type[], $5)",
-        [req.params.id, "default", "managed-by-admin", stations, slug]
-      );
-    }
-
-    return res.json({ user: result.rows[0] });
-  } catch (error) {
-    return next(error);
-  }
-});
-
-eventRoutes.delete("/auth/users/:id", requireAuth, requireAdmin, async (req, res, next) => {
-  try {
-    const { slug } = req.params;
-    if (req.params.id === req.user?.id) {
-      return res.status(400).json({ error: "cannot_delete_self", message: "You cannot delete your own account while signed in." });
-    }
-
-    const result = await query("UPDATE users SET active = FALSE WHERE id = $1 AND event_slug = $2 RETURNING id", [req.params.id, slug]);
-    if (!result.rows[0]) {
-      return res.status(404).json({ error: "not_found", message: "User not found." });
-    }
-    await query("UPDATE volunteer_keys SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL AND event_slug = $2", [req.params.id, slug]);
-    return res.status(204).send();
   } catch (error) {
     return next(error);
   }

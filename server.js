@@ -5,7 +5,10 @@ import bcrypt from "bcryptjs";
 import { runMigrations, query } from "./db.js";
 import { eventRoutes } from "./routes/eventRoutes.js";
 import { intakeRoutes } from "./routes/intakeRoutes.js";
-import { requireAuth, requireAdmin, requireSuperAdmin, requirePermission, signUser } from "./middleware/auth.js";
+import { taskRoutes } from "./routes/taskRoutes.js";
+import { meetingRoutes } from "./routes/meetingRoutes.js";
+import { resourceRoutes } from "./routes/resourceRoutes.js";
+import { requireAuth, requireAdmin, requireSuperAdmin, requireHubAccess, signUser } from "./middleware/auth.js";
 import { recruitmentsRoutes } from "./routes/recruitmentsRoutes.js";
 
 dotenv.config();
@@ -31,7 +34,7 @@ app.get("/api/events", async (req, res, next) => {
   }
 });
 
-app.post("/api/events", requireAuth, requirePermission('manage_events'), async (req, res, next) => {
+app.post("/api/events", requireAuth, requireHubAccess('members', 'events'), async (req, res, next) => {
   try {
     const { slug, name, description, banner_url, logo_url, start_date, end_date, status } = req.body;
     if (!slug || !name) {
@@ -49,7 +52,7 @@ app.post("/api/events", requireAuth, requirePermission('manage_events'), async (
   }
 });
 
-app.put("/api/events/:slug", requireAuth, requirePermission('manage_events'), async (req, res, next) => {
+app.put("/api/events/:slug", requireAuth, requireHubAccess('members', 'events'), async (req, res, next) => {
   try {
     const { slug } = req.params;
     const { name, description, banner_url, logo_url, start_date, end_date, status } = req.body;
@@ -76,7 +79,7 @@ app.put("/api/events/:slug", requireAuth, requirePermission('manage_events'), as
   }
 });
 
-app.delete("/api/events/:slug", requireAuth, requirePermission('manage_events'), async (req, res, next) => {
+app.delete("/api/events/:slug", requireAuth, requireHubAccess('members', 'events'), async (req, res, next) => {
   try {
     const { slug } = req.params;
     const result = await query("DELETE FROM events WHERE slug = $1 RETURNING id", [slug]);
@@ -89,13 +92,22 @@ app.delete("/api/events/:slug", requireAuth, requirePermission('manage_events'),
   }
 });
 
-// Scope registration desk suite per event
+// Scope registration desk// Use the external routes
 app.use("/api/events/:slug", eventRoutes);
 
-// Scope intake process
+// Intake Routes
 app.use("/api/intake", intakeRoutes);
 
-// Scope recruitments process
+// Task Routes
+app.use("/api/tasks", taskRoutes);
+
+// Meeting Routes
+app.use("/api/meetings", meetingRoutes);
+
+// Resource Routes
+app.use("/api/resources", resourceRoutes);
+
+// Recruitments Public Routes
 app.use("/api/recruitments", recruitmentsRoutes);
 
 // In-memory mock database cache with seeder defaults
@@ -199,8 +211,11 @@ app.post("/api/auth/login", async (req, res, next) => {
         const payload = {
           username: matchedGlobal.username,
           role: matchedGlobal.role, // array of roles, e.g., ['superadmin'] or ['admin']
-          permissions: matchedGlobal.permissions || [],
-          departments: matchedGlobal.departments || [],
+          user_groups: ["Superadmins"],
+          merged_permissions: {
+            hubs: { members: ["*"], opensrc: ["*"] },
+            events: { "*": ["*"] }
+          },
           global: true
         };
         return res.json({
@@ -217,17 +232,50 @@ app.post("/api/auth/login", async (req, res, next) => {
       if (user) {
         const passwordMatch = await bcrypt.compare(password, user.password_hash);
         if (passwordMatch) {
+          // Fetch groups and merge permissions
+          const groupsResult = await query(
+            `SELECT g.id, g.name, g.permissions 
+             FROM user_groups g 
+             JOIN user_group_members ugm ON g.id = ugm.group_id 
+             WHERE ugm.user_id = $1`, 
+            [user.id]
+          );
+          
+          let merged_permissions = { hubs: { members: [], opensrc: [] }, events: {} };
+          const user_groups = [];
+
+          groupsResult.rows.forEach(g => {
+            user_groups.push(g.name);
+            const p = g.permissions || {};
+            
+            // Merge Hubs
+            if (p.hubs?.members) merged_permissions.hubs.members.push(...p.hubs.members);
+            if (p.hubs?.opensrc) merged_permissions.hubs.opensrc.push(...p.hubs.opensrc);
+            
+            // Merge Events
+            if (p.events) {
+              for (const [slug, caps] of Object.entries(p.events)) {
+                if (!merged_permissions.events[slug]) merged_permissions.events[slug] = [];
+                if (Array.isArray(caps)) merged_permissions.events[slug].push(...caps);
+              }
+            }
+          });
+
+          // Deduplicate arrays
+          merged_permissions.hubs.members = [...new Set(merged_permissions.hubs.members)];
+          merged_permissions.hubs.opensrc = [...new Set(merged_permissions.hubs.opensrc)];
+          for (const slug in merged_permissions.events) {
+            merged_permissions.events[slug] = [...new Set(merged_permissions.events[slug])];
+          }
+
           const payload = {
             id: user.id,
             username: user.email,
             email: user.email,
             name: user.name,
-            role: [user.role], // 'admin' or 'volunteer'
-            departments: user.departments || [],
-            event_slug: user.event_slug,
-            permissions: user.role === "admin" 
-              ? ["event_admin", "can_scan", "can_verify", "can_register", "can_view_attendees", "can_export", "can_transfer"] 
-              : ["can_scan", "can_view_attendees"],
+            role: [user.role],
+            user_groups,
+            merged_permissions,
             global: false
           };
           
@@ -271,6 +319,30 @@ app.post("/api/auth/login", async (req, res, next) => {
     }
 
     return res.status(401).json({ error: "invalid_credentials", message: "Invalid credentials." });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Update current user's password
+app.put("/api/auth/me/password", requireAuth, async (req, res, next) => {
+  try {
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ error: "invalid_password", message: "Password must be at least 8 characters long." });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    const result = await query(
+      "UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE email = $2 RETURNING id",
+      [passwordHash, req.user.username]
+    );
+    
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "not_found", message: "User not found in database." });
+    }
+    
+    return res.json({ success: true, message: "Password updated successfully." });
   } catch (error) {
     next(error);
   }
@@ -345,7 +417,7 @@ app.get("/api/templates", (req, res) => {
   res.json(templatesDb);
 });
 
-app.put("/api/templates", requireAuth, requirePermission('manage_certificates'), async (req, res) => {
+app.put("/api/templates", requireAuth, requireHubAccess('opensrc', 'certificates'), async (req, res) => {
   templatesDb = req.body;
   await syncToFirebase("templates", templatesDb);
   res.json({ success: true, templates: templatesDb });
@@ -356,7 +428,7 @@ app.get("/api/certificates", (req, res) => {
   res.json(certificatesDb);
 });
 
-app.put("/api/certificates", requireAuth, requirePermission('manage_certificates'), async (req, res) => {
+app.put("/api/certificates", requireAuth, requireHubAccess('opensrc', 'certificates'), async (req, res) => {
   certificatesDb = req.body;
   await syncToFirebase("certificates", certificatesDb);
   res.json({ success: true, certificates: certificatesDb });
@@ -367,7 +439,7 @@ app.get("/api/projects", (req, res) => {
   res.json(projectsDb);
 });
 
-app.post("/api/projects", requireAuth, requirePermission('manage_projects'), async (req, res) => {
+app.post("/api/projects", requireAuth, requireHubAccess('opensrc', 'projects'), async (req, res) => {
   const project = req.body;
   if (!project.name) {
     return res.status(400).json({ error: "Missing project name." });
@@ -378,7 +450,7 @@ app.post("/api/projects", requireAuth, requirePermission('manage_projects'), asy
   res.status(201).json(project);
 });
 
-app.put("/api/projects", requireAuth, requirePermission('manage_projects'), async (req, res) => {
+app.put("/api/projects", requireAuth, requireHubAccess('opensrc', 'projects'), async (req, res) => {
   if (!Array.isArray(req.body)) {
     return res.status(400).json({ error: "Expected an array of projects." });
   }
@@ -387,7 +459,7 @@ app.put("/api/projects", requireAuth, requirePermission('manage_projects'), asyn
   res.json({ success: true, projects: projectsDb });
 });
 
-app.delete("/api/projects/:name", requireAuth, requirePermission('manage_projects'), async (req, res) => {
+app.delete("/api/projects/:name", requireAuth, requireHubAccess('opensrc', 'projects'), async (req, res) => {
   const { name } = req.params;
   projectsDb = projectsDb.filter(p => p.name !== name);
   await syncToFirebase("projects", projectsDb);
@@ -399,7 +471,7 @@ app.get("/api/hall-of-fame", (req, res) => {
   res.json(hallOfFameDb);
 });
 
-app.post("/api/hall-of-fame", requireAuth, requirePermission('manage_hall_of_fame'), async (req, res) => {
+app.post("/api/hall-of-fame", requireAuth, requireHubAccess('opensrc', 'hall_of_fame'), async (req, res) => {
   const event = req.body;
   if (!event.eventName) {
     return res.status(400).json({ error: "Missing event name." });
@@ -410,7 +482,7 @@ app.post("/api/hall-of-fame", requireAuth, requirePermission('manage_hall_of_fam
   res.status(201).json(event);
 });
 
-app.put("/api/hall-of-fame", requireAuth, requirePermission('manage_hall_of_fame'), async (req, res) => {
+app.put("/api/hall-of-fame", requireAuth, requireHubAccess('opensrc', 'hall_of_fame'), async (req, res) => {
   if (!Array.isArray(req.body)) {
     return res.status(400).json({ error: "Expected an array of events." });
   }
@@ -419,7 +491,7 @@ app.put("/api/hall-of-fame", requireAuth, requirePermission('manage_hall_of_fame
   res.json({ success: true, hall_of_fame: hallOfFameDb });
 });
 
-app.delete("/api/hall-of-fame/:name", requireAuth, requirePermission('manage_hall_of_fame'), async (req, res) => {
+app.delete("/api/hall-of-fame/:name", requireAuth, requireHubAccess('opensrc', 'hall_of_fame'), async (req, res) => {
   const { name } = req.params;
   hallOfFameDb = hallOfFameDb.filter(e => e.eventName !== name);
   await syncToFirebase("hall_of_fame", hallOfFameDb);
@@ -431,7 +503,7 @@ app.get("/api/legacy", (req, res) => {
   res.json(legacyDb);
 });
 
-app.post("/api/legacy", requireAuth, requirePermission('manage_legacy'), async (req, res) => {
+app.post("/api/legacy", requireAuth, requireHubAccess('opensrc', 'legacy'), async (req, res) => {
   const member = req.body;
   if (!member.name) {
     return res.status(400).json({ error: "Missing member name." });
@@ -442,7 +514,7 @@ app.post("/api/legacy", requireAuth, requirePermission('manage_legacy'), async (
   res.status(201).json(member);
 });
 
-app.put("/api/legacy", requireAuth, requirePermission('manage_legacy'), async (req, res) => {
+app.put("/api/legacy", requireAuth, requireHubAccess('opensrc', 'legacy'), async (req, res) => {
   if (!Array.isArray(req.body)) {
     return res.status(400).json({ error: "Expected an array of members." });
   }
@@ -451,74 +523,239 @@ app.put("/api/legacy", requireAuth, requirePermission('manage_legacy'), async (r
   res.json({ success: true, legacy: legacyDb });
 });
 
-app.delete("/api/legacy/:name", requireAuth, requirePermission('manage_legacy'), async (req, res) => {
+app.delete("/api/legacy/:name", requireAuth, requireHubAccess('opensrc', 'legacy'), async (req, res) => {
   const { name } = req.params;
   legacyDb = legacyDb.filter(m => m.name !== name);
   await syncToFirebase("legacy", legacyDb);
   res.json({ success: true, message: `Legacy member ${name} deleted.` });
 });
 
-// ADMIN USERS CRUD
-app.get("/api/users", (req, res) => {
-  res.json(adminUsersDb);
-});
-
-app.post("/api/users", requireAuth, requireSuperAdmin, async (req, res) => {
-  const user = req.body;
-  if (!user.username) {
-    return res.status(400).json({ error: "Missing username." });
+// USER GROUPS CRUD
+app.get("/api/user-groups", requireAuth, requireSuperAdmin, async (req, res, next) => {
+  try {
+    const result = await query("SELECT id, name, description, permissions FROM user_groups ORDER BY name ASC");
+    res.json({ groups: result.rows });
+  } catch (err) {
+    next(err);
   }
-  adminUsersDb = adminUsersDb.filter(u => u.username.toLowerCase() !== user.username.toLowerCase());
-  adminUsersDb.push(user);
-  await syncToFirebase("admin_users", adminUsersDb);
-  res.status(201).json(user);
 });
 
-app.put("/api/users", requireAuth, requireSuperAdmin, async (req, res) => {
-  if (!Array.isArray(req.body)) {
-    return res.status(400).json({ error: "Expected an array of users." });
+app.post("/api/user-groups", requireAuth, requireSuperAdmin, async (req, res, next) => {
+  try {
+    const { name, description, permissions } = req.body;
+    if (!name) return res.status(400).json({ error: "missing_fields", message: "Name is required." });
+    
+    const result = await query(
+      `INSERT INTO user_groups (name, description, permissions) VALUES ($1, $2, $3) RETURNING id, name, description, permissions`,
+      [name, description, permissions || {}]
+    );
+    res.status(201).json({ group: result.rows[0] });
+  } catch (err) {
+    next(err);
   }
-  adminUsersDb = req.body;
-  await syncToFirebase("admin_users", adminUsersDb);
-  res.json({ success: true, users: adminUsersDb });
 });
 
-app.delete("/api/users/:username", requireAuth, requireSuperAdmin, async (req, res) => {
-  const { username } = req.params;
-  adminUsersDb = adminUsersDb.filter(u => u.username.toLowerCase() !== username.toLowerCase());
-  await syncToFirebase("admin_users", adminUsersDb);
-  res.json({ success: true, message: `Admin user ${username} deleted.` });
+app.put("/api/user-groups/:id", requireAuth, requireSuperAdmin, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { name, description, permissions } = req.body;
+    const result = await query(
+      `UPDATE user_groups SET name = $1, description = $2, permissions = $3 WHERE id = $4 RETURNING id, name, description, permissions`,
+      [name, description, permissions || {}, id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "not_found", message: "Group not found." });
+    res.json({ success: true, group: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete("/api/user-groups/:id", requireAuth, requireSuperAdmin, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    await query(`DELETE FROM user_groups WHERE id = $1`, [id]);
+    res.json({ success: true, message: `User group deleted.` });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// USERS LIST (For Dropdowns)
+app.get("/api/users/list", requireAuth, async (req, res, next) => {
+  try {
+    const result = await query("SELECT id, name, role FROM users WHERE active = TRUE ORDER BY name ASC");
+    res.json({ users: result.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GLOBAL USERS CRUD (Members Dashboard)
+app.get("/api/users/manage", requireAuth, requireSuperAdmin, async (req, res, next) => {
+  try {
+    const result = await query(`
+      SELECT u.id, u.name, u.email, u.role, u.active, u.created_at, u.points, 
+      COALESCE(json_agg(ugm.group_id) FILTER (WHERE ugm.group_id IS NOT NULL), '[]') as user_groups
+      FROM users u
+      LEFT JOIN user_group_members ugm ON u.id = ugm.user_id
+      GROUP BY u.id
+      ORDER BY u.created_at DESC
+    `);
+    res.json({ users: result.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/api/users/manage", requireAuth, requireSuperAdmin, async (req, res, next) => {
+  try {
+    const { name, email, password, role, user_groups } = req.body;
+    if (!name || !email || !password) return res.status(400).json({ error: "missing_fields", message: "Name, email, and password required." });
+    
+    const hash = await bcrypt.hash(password, 10);
+    const result = await query(
+      `INSERT INTO users (name, email, password_hash, role, active)
+       VALUES ($1, $2, $3, $4, TRUE) RETURNING id, name, email, role`,
+      [name, email, hash, role || 'volunteer']
+    );
+    
+    const userId = result.rows[0].id;
+    if (Array.isArray(user_groups) && user_groups.length > 0) {
+      for (const groupId of user_groups) {
+        await query(`INSERT INTO user_group_members (user_id, group_id) VALUES ($1, $2)`, [userId, groupId]);
+      }
+    }
+    
+    res.status(201).json({ user: { ...result.rows[0], user_groups: user_groups || [] } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.put("/api/users/manage/:id", requireAuth, requireSuperAdmin, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { name, email, role, user_groups, password, active } = req.body;
+    
+    let queryStr = `UPDATE users SET name = $1, email = $2, role = $3`;
+    const params = [name, email, role];
+    let paramIdx = 4;
+
+    if (password) {
+      const hash = await bcrypt.hash(password, 10);
+      queryStr += `, password_hash = $${paramIdx++}`;
+      params.push(hash);
+    }
+    
+    if (active !== undefined) {
+      queryStr += `, active = $${paramIdx++}`;
+      params.push(active);
+    }
+
+    queryStr += ` WHERE id = $${paramIdx} RETURNING id, name, email, role, active`;
+    params.push(id);
+
+    const result = await query(queryStr, params);
+    if (!result.rows[0]) return res.status(404).json({ error: "not_found", message: "User not found." });
+    
+    if (Array.isArray(user_groups)) {
+      await query(`DELETE FROM user_group_members WHERE user_id = $1`, [id]);
+      for (const groupId of user_groups) {
+        await query(`INSERT INTO user_group_members (user_id, group_id) VALUES ($1, $2)`, [id, groupId]);
+      }
+    }
+    
+    res.json({ success: true, user: { ...result.rows[0], user_groups: user_groups || [] } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete("/api/users/manage/:id", requireAuth, requireSuperAdmin, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    await query(`DELETE FROM users WHERE id = $1`, [id]);
+    res.json({ success: true, message: `User deleted.` });
+  } catch (err) {
+    next(err);
+  }
 });
 
 
 // LEADERBOARD ENDPOINTS
-app.get("/api/leaderboard", (req, res) => {
-  // Return full mock leaderboard acts
-  res.json(leaderboardDb);
+app.get("/api/leaderboard", async (req, res, next) => {
+  try {
+    const { rows } = await query(`
+      SELECT l.act_num, l.points as rating, l.contributions, u.name as name
+      FROM leaderboard l
+      JOIN users u ON l.user_id = u.id
+      ORDER BY l.act_num ASC, l.points DESC
+    `);
+    
+    const db = {};
+    rows.forEach(r => {
+      const actKey = `leaderboard-act${r.act_num}`;
+      if (!db[actKey]) db[actKey] = {};
+      const count = Object.keys(db[actKey]).length;
+      db[actKey][count] = {
+        Name: r.name,
+        Rating: r.rating,
+        Contributions: r.contributions,
+        Image: "unranked"
+      };
+    });
+    res.json(db);
+  } catch (err) {
+    next(err);
+  }
 });
 
-app.put("/api/leaderboard-act/:actNum", async (req, res) => {
-  const { actNum } = req.params;
-  const rawMembers = req.body;
-  
-  // Update internal mock acts cache
-  leaderboardDb[`leaderboard-act${actNum}`] = rawMembers;
-  
-  // Proxy to Firebase if configured
-  const fbUrl = process.env.FIREBASE_DB_URL;
-  if (fbUrl) {
-    try {
-      const cleanUrl = fbUrl.replace(/\/$/, "");
-      await fetch(`${cleanUrl}/vitcc/owasp/leaderboard-act${actNum}.json`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(rawMembers)
-      });
-    } catch (err) {
-      console.error(`Firebase Leaderboard sync failed for Act ${actNum}:`, err.message);
+app.put("/api/leaderboard-act/:actNum", async (req, res, next) => {
+  try {
+    const { actNum } = req.params;
+    const rawMembers = req.body;
+    
+    const members = Object.values(rawMembers);
+    for (const member of members) {
+      const name = member.Name || member.name;
+      const userRes = await query('SELECT id FROM users WHERE name = $1 LIMIT 1', [name]);
+      if (userRes.rows.length > 0) {
+        const userId = userRes.rows[0].id;
+        await query(`
+          INSERT INTO leaderboard (user_id, act_num, points, rating, contributions)
+          VALUES ($1, $2, $3, $3, $4)
+          ON CONFLICT (user_id, act_num) DO UPDATE SET
+            points = EXCLUDED.points,
+            rating = EXCLUDED.rating,
+            contributions = EXCLUDED.contributions
+        `, [
+          userId, 
+          actNum, 
+          Number(member.Rating || member.rating || 0), 
+          member.Contributions || member.contributions || ''
+        ]);
+      }
     }
+    
+    // Proxy to Firebase if configured
+    const fbUrl = process.env.FIREBASE_DB_URL;
+    if (fbUrl) {
+      try {
+        const cleanUrl = fbUrl.replace(/\/$/, "");
+        await fetch(`${cleanUrl}/vitcc/owasp/leaderboard-act${actNum}.json`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(rawMembers)
+        });
+      } catch (err) {
+        console.error(`Firebase Leaderboard sync failed for Act ${actNum}:`, err.message);
+      }
+    }
+    
+    res.json({ success: true, act: actNum });
+  } catch (err) {
+    next(err);
   }
-  res.json({ success: true, act: actNum });
 });
 
 // Start Express Listener

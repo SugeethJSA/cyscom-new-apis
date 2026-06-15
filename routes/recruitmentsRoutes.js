@@ -6,25 +6,41 @@ export const recruitmentsRoutes = Router();
 // POST /api/recruitments
 recruitmentsRoutes.post("/", async (req, res, next) => {
   try {
-    const {
-      name,
-      email,
-      phone,
-      regNumber,
-      departmentPrimary,
-      departmentSecondary,
-      skills,
-      motivation,
-      contribution
-    } = req.body;
+    const body = req.body || {};
+    
+    // Extract standard fields prioritizing camelCase, fallback to snake_case
+    const name = body.name;
+    const email = body.email;
+    const phone = body.phone;
+    const regNumber = body.regNumber || body.reg_number;
+    const departmentPrimary = body.departmentPrimary || body.department_primary;
+    const departmentSecondary = body.departmentSecondary || body.department_secondary;
+    const skills = body.skills;
+    const motivation = body.motivation;
+    const contribution = body.contribution;
+
+    // Filter out standard fields to capture custom data
+    const standardKeys = [
+      'name', 'email', 'phone', 'regNumber', 'reg_number', 
+      'departmentPrimary', 'department_primary', 
+      'departmentSecondary', 'department_secondary', 
+      'skills', 'motivation', 'contribution'
+    ];
+    
+    const customData = Object.keys(body)
+      .filter(key => !standardKeys.includes(key))
+      .reduce((obj, key) => {
+        obj[key] = body[key];
+        return obj;
+      }, {});
 
     if (!name || !email) {
       return res.status(400).json({ error: "missing_fields", message: "Name and email are required." });
     }
 
     const result = await query(
-      `INSERT INTO recruitments (name, email, phone, reg_number, department_primary, department_secondary, skills, motivation, contribution)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO recruitments (name, email, phone, reg_number, department_primary, department_secondary, skills, motivation, contribution, custom_data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
       [
         name,
@@ -35,7 +51,8 @@ recruitmentsRoutes.post("/", async (req, res, next) => {
         departmentSecondary || null,
         skills || null,
         motivation || null,
-        contribution || null
+        contribution || null,
+        JSON.stringify(customData || {})
       ]
     );
 
