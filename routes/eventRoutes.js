@@ -464,6 +464,76 @@ eventRoutes.put("/attendees/:id", requireAuth, async (req, res, next) => {
   }
 });
 
+// Bulk import attendees from frontend JSON
+eventRoutes.post("/attendees/import", requireAuth, async (req, res, next) => {
+  try {
+    const { slug } = req.params;
+    const { attendees } = req.body;
+    if (!Array.isArray(attendees)) {
+      return res.status(400).json({ error: "invalid_payload", message: "Expected attendees array." });
+    }
+
+    const generatedCredentials = [];
+    
+    // Process attendees in a transaction
+    const { withTransaction } = await import("../db.js");
+    await withTransaction(async (client) => {
+      for (const att of attendees) {
+        if (!att.email) continue;
+        const email = att.email.trim().toLowerCase();
+        
+        // Ensure user account exists
+        let userId = null;
+        const userCheck = await client.query("SELECT id FROM users WHERE email = $1", [email]);
+        
+        if (userCheck.rows[0]) {
+          userId = userCheck.rows[0].id;
+        } else {
+          // Generate an 8 character random password
+          const plainPassword = Math.random().toString(36).slice(-8);
+          const hash = await bcrypt.hash(plainPassword, 10);
+          
+          const userInsert = await client.query(
+            `INSERT INTO users (name, email, password_hash, role)
+             VALUES ($1, $2, $3, 'participant')
+             RETURNING id`,
+            [att.name || "", email, hash]
+          );
+          userId = userInsert.rows[0].id;
+          generatedCredentials.push({ email, name: att.name || "", password: plainPassword });
+        }
+
+        await client.query(
+          `INSERT INTO attendees (name, email, phone, college, department, metadata, event_slug, user_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (email, event_slug) DO UPDATE
+           SET name = EXCLUDED.name,
+               phone = EXCLUDED.phone,
+               college = EXCLUDED.college,
+               department = EXCLUDED.department,
+               user_id = EXCLUDED.user_id,
+               metadata = attendees.metadata || EXCLUDED.metadata,
+               updated_at = now()`,
+          [
+            att.name || "", 
+            email, 
+            att.phone || "", 
+            att.college || "", 
+            att.department || "", 
+            { customFields: att.customFields || {} }, 
+            slug, 
+            userId
+          ]
+        );
+      }
+    });
+
+    res.status(201).json({ success: true, count: attendees.length, credentials: generatedCredentials });
+  } catch (error) {
+    next(error);
+  }
+});
+
 eventRoutes.post("/attendees/public-register", optionalAuth, async (req, res, next) => {
   try {
     const { slug } = req.params;
@@ -487,6 +557,14 @@ eventRoutes.post("/attendees/public-register", optionalAuth, async (req, res, ne
     const result = await query(
       `INSERT INTO attendees (external_ref, name, email, phone, college, department, metadata, registered_on_spot, event_slug, user_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9)
+       ON CONFLICT (email, event_slug) DO UPDATE
+       SET name = EXCLUDED.name,
+           phone = EXCLUDED.phone,
+           college = EXCLUDED.college,
+           department = EXCLUDED.department,
+           user_id = EXCLUDED.user_id,
+           metadata = attendees.metadata || EXCLUDED.metadata,
+           updated_at = now()
        RETURNING *`,
       [
         input.externalRef,
