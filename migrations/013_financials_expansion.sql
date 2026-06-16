@@ -1,4 +1,4 @@
-ALTER TABLE event_budgets ADD COLUMN target_expenditure NUMERIC(10, 2) DEFAULT 0;
+ALTER TABLE event_budgets ADD COLUMN IF NOT EXISTS target_expenditure NUMERIC(10, 2) DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS standard_expenses (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
