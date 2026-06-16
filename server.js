@@ -8,8 +8,14 @@ import { intakeRoutes } from "./routes/intakeRoutes.js";
 import { taskRoutes } from "./routes/taskRoutes.js";
 import { meetingRoutes } from "./routes/meetingRoutes.js";
 import { resourceRoutes } from "./routes/resourceRoutes.js";
+import { projectRoutes } from "./routes/projectRoutes.js";
+import { certificateRoutes } from "./routes/certificateRoutes.js";
+import { hallOfFameRoutes } from "./routes/hallOfFameRoutes.js";
 import { requireAuth, requireAdmin, requireSuperAdmin, requireHubAccess, signUser } from "./middleware/auth.js";
 import { recruitmentsRoutes } from "./routes/recruitmentsRoutes.js";
+import { participantAuthRoutes } from "./routes/participantAuthRoutes.js";
+import { teamRoutes } from "./routes/teamRoutes.js";
+import { financeRoutes } from "./routes/financeRoutes.js";
 
 dotenv.config();
 
@@ -27,7 +33,13 @@ app.use(express.json());
 // Global events catalog endpoints
 app.get("/api/events", async (req, res, next) => {
   try {
-    const result = await query("SELECT * FROM events ORDER BY start_date DESC, created_at DESC");
+    const { public: isPublicOnly } = req.query;
+    let result;
+    if (isPublicOnly === 'true') {
+      result = await query("SELECT * FROM events WHERE is_public = true ORDER BY start_date DESC, created_at DESC");
+    } else {
+      result = await query("SELECT * FROM events ORDER BY start_date DESC, created_at DESC");
+    }
     res.json({ events: result.rows });
   } catch (error) {
     next(error);
@@ -36,15 +48,15 @@ app.get("/api/events", async (req, res, next) => {
 
 app.post("/api/events", requireAuth, requireHubAccess('members', 'events'), async (req, res, next) => {
   try {
-    const { slug, name, description, banner_url, logo_url, start_date, end_date, status } = req.body;
+    const { slug, name, description, banner_url, logo_url, start_date, end_date, status, is_public } = req.body;
     if (!slug || !name) {
       return res.status(400).json({ error: "missing_fields", message: "slug and name are required." });
     }
     const result = await query(
-      `INSERT INTO events (slug, name, description, banner_url, logo_url, start_date, end_date, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO events (slug, name, description, banner_url, logo_url, start_date, end_date, status, is_public)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
-      [slug.toLowerCase().replace(/[^a-z0-9-]/g, ""), name, description || null, banner_url || null, logo_url || null, start_date || null, end_date || null, status || "active"]
+      [slug.toLowerCase().replace(/[^a-z0-9-]/g, ""), name, description || null, banner_url || null, logo_url || null, start_date || null, end_date || null, status || "active", is_public || false]
     );
     res.status(201).json({ event: result.rows[0] });
   } catch (error) {
@@ -55,7 +67,7 @@ app.post("/api/events", requireAuth, requireHubAccess('members', 'events'), asyn
 app.put("/api/events/:slug", requireAuth, requireHubAccess('members', 'events'), async (req, res, next) => {
   try {
     const { slug } = req.params;
-    const { name, description, banner_url, logo_url, start_date, end_date, status } = req.body;
+    const { name, description, banner_url, logo_url, start_date, end_date, status, is_public } = req.body;
     const result = await query(
       `UPDATE events
           SET name = COALESCE($2, name),
@@ -65,10 +77,11 @@ app.put("/api/events/:slug", requireAuth, requireHubAccess('members', 'events'),
               start_date = $6,
               end_date = $7,
               status = COALESCE($8, status),
+              is_public = COALESCE($9, is_public),
               updated_at = now()
         WHERE slug = $1
         RETURNING *`,
-      [slug, name, description || null, banner_url || null, logo_url || null, start_date || null, end_date || null, status || null]
+      [slug, name, description || null, banner_url || null, logo_url || null, start_date || null, end_date || null, status || null, is_public]
     );
     if (!result.rows[0]) {
       return res.status(404).json({ error: "not_found", message: `Event ${slug} not found.` });
@@ -92,8 +105,10 @@ app.delete("/api/events/:slug", requireAuth, requireHubAccess('members', 'events
   }
 });
 
-// Scope registration desk// Use the external routes
+app.use("/api/finances", financeRoutes);
+app.use("/api/teams", teamRoutes);
 app.use("/api/events/:slug", eventRoutes);
+app.use("/api/auth/participant", participantAuthRoutes);
 
 // Intake Routes
 app.use("/api/intake", intakeRoutes);
@@ -106,6 +121,15 @@ app.use("/api/meetings", meetingRoutes);
 
 // Resource Routes
 app.use("/api/resources", resourceRoutes);
+
+// Project Routes
+app.use("/api/projects", projectRoutes);
+
+// Certificate Routes
+app.use("/api/certificates", certificateRoutes);
+
+// Hall of Fame Routes
+app.use("/api/hall-of-fame", hallOfFameRoutes);
 
 // Recruitments Public Routes
 app.use("/api/recruitments", recruitmentsRoutes);
@@ -230,6 +254,9 @@ app.post("/api/auth/login", async (req, res, next) => {
       const dbResult = await query("SELECT * FROM users WHERE email = $1 AND active = TRUE", [username.trim().toLowerCase()]);
       const user = dbResult.rows[0];
       if (user) {
+        if (user.is_legacy) {
+          return res.status(403).json({ error: "legacy_account", message: "This account has been retired to Legacy status and can no longer log in." });
+        }
         const passwordMatch = await bcrypt.compare(password, user.password_hash);
         if (passwordMatch) {
           // Fetch groups and merge permissions
@@ -591,10 +618,25 @@ app.get("/api/users/list", requireAuth, async (req, res, next) => {
 });
 
 // GLOBAL USERS CRUD (Members Dashboard)
+// Legacy users public endpoint
+app.get("/api/users/legacy", async (req, res, next) => {
+  try {
+    const result = await query(`
+      SELECT id, name, legacy_date 
+      FROM users 
+      WHERE is_legacy = true 
+      ORDER BY legacy_date DESC
+    `);
+    res.json({ legacy: result.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.get("/api/users/manage", requireAuth, requireSuperAdmin, async (req, res, next) => {
   try {
     const result = await query(`
-      SELECT u.id, u.name, u.email, u.role, u.active, u.created_at, u.points, 
+      SELECT u.id, u.name, u.email, u.role, u.active, u.created_at, u.points, u.is_legacy, u.legacy_date,
       COALESCE(json_agg(ugm.group_id) FILTER (WHERE ugm.group_id IS NOT NULL), '[]') as user_groups
       FROM users u
       LEFT JOIN user_group_members ugm ON u.id = ugm.user_id
@@ -635,7 +677,7 @@ app.post("/api/users/manage", requireAuth, requireSuperAdmin, async (req, res, n
 app.put("/api/users/manage/:id", requireAuth, requireSuperAdmin, async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name, email, role, user_groups, password, active } = req.body;
+    const { name, email, role, user_groups, password, active, is_legacy } = req.body;
     
     let queryStr = `UPDATE users SET name = $1, email = $2, role = $3`;
     const params = [name, email, role];
@@ -652,7 +694,17 @@ app.put("/api/users/manage/:id", requireAuth, requireSuperAdmin, async (req, res
       params.push(active);
     }
 
-    queryStr += ` WHERE id = $${paramIdx} RETURNING id, name, email, role, active`;
+    if (is_legacy !== undefined) {
+      queryStr += `, is_legacy = $${paramIdx++}`;
+      params.push(is_legacy);
+      if (is_legacy) {
+         queryStr += `, legacy_date = CURRENT_TIMESTAMP`;
+      } else {
+         queryStr += `, legacy_date = NULL`;
+      }
+    }
+
+    queryStr += ` WHERE id = $${paramIdx} RETURNING id, name, email, role, active, is_legacy, legacy_date`;
     params.push(id);
 
     const result = await query(queryStr, params);

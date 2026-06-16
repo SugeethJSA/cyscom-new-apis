@@ -39,7 +39,7 @@ taskRoutes.get("/", requireAuth, async (req, res, next) => {
 // Create a new task
 taskRoutes.post("/", requireAuth, async (req, res, next) => {
   try {
-    const { title, description, priority, department, points_reward, assigned_user_ids } = req.body;
+    const { title, description, priority, department, points_reward, assigned_user_ids, project_id } = req.body;
     
     if (!title || !department) {
       return res.status(400).json({ error: "missing_fields", message: "Title and department are required." });
@@ -49,10 +49,10 @@ taskRoutes.post("/", requireAuth, async (req, res, next) => {
 
     // Insert task
     const taskRes = await query(`
-      INSERT INTO tasks (title, description, priority, department, points_reward, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO tasks (title, description, priority, department, points_reward, project_id, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING *
-    `, [title, description, priority || 'medium', department, points_reward || 10, userId]);
+    `, [title, description, priority || 'medium', department, points_reward || 10, project_id || null, userId]);
     
     const newTask = taskRes.rows[0];
 
@@ -87,9 +87,20 @@ taskRoutes.post("/", requireAuth, async (req, res, next) => {
 taskRoutes.put("/:id/status", requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, project_id } = req.body;
 
-    const taskRes = await query(`UPDATE tasks SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`, [status, id]);
+    let queryStr = `UPDATE tasks SET status = $1, updated_at = CURRENT_TIMESTAMP`;
+    let params = [status, id];
+    let paramIdx = 3;
+
+    if (project_id !== undefined) {
+      queryStr += `, project_id = $${paramIdx++}`;
+      params.push(project_id);
+    }
+
+    queryStr += ` WHERE id = $2 RETURNING *`;
+    
+    const taskRes = await query(queryStr, params);
     
     if (taskRes.rows.length === 0) {
       return res.status(404).json({ error: "not_found", message: "Task not found." });

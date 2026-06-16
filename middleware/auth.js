@@ -21,6 +21,17 @@ export function requireAuth(req, res, next) {
   }
 }
 
+export function optionalAuth(req, res, next) {
+  const header = req.header("authorization");
+  const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
+  if (!token) return next();
+
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+  } catch (err) {}
+  return next();
+}
+
 export function requireAdmin(req, res, next) {
   const roles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role].filter(Boolean);
   if (!roles.includes("admin") && !roles.includes("superadmin")) {

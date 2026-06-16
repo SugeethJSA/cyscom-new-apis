@@ -6,7 +6,7 @@ import multer from "multer";
 import xlsx from "xlsx";
 import { z } from "zod";
 import { pool, query, withTransaction } from "../db.js";
-import { requireAuth, requireAdmin, signUser } from "../middleware/auth.js";
+import { requireAuth, requireAdmin, signUser, optionalAuth } from "../middleware/auth.js";
 import { encryptQrPayload, exportQrDecryptKey, hashPayload } from "../services/crypto.js";
 import { sendQrEmail } from "../services/email.js";
 import { parseExcel } from "../services/excel.js";
@@ -464,7 +464,7 @@ eventRoutes.put("/attendees/:id", requireAuth, async (req, res, next) => {
   }
 });
 
-eventRoutes.post("/attendees/public-register", async (req, res, next) => {
+eventRoutes.post("/attendees/public-register", optionalAuth, async (req, res, next) => {
   try {
     const { slug } = req.params;
     const settingsRes = await query("SELECT setting_key, setting_value FROM system_settings WHERE event_slug = $1 AND setting_key IN ('all_registrations_enabled', 'require_payment_proof')", [slug]);
@@ -485,8 +485,8 @@ eventRoutes.post("/attendees/public-register", async (req, res, next) => {
     const paymentProof = req.body.paymentProof;
 
     const result = await query(
-      `INSERT INTO attendees (external_ref, name, email, phone, college, department, metadata, registered_on_spot, event_slug)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8)
+      `INSERT INTO attendees (external_ref, name, email, phone, college, department, metadata, registered_on_spot, event_slug, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9)
        RETURNING *`,
       [
         input.externalRef,
@@ -500,9 +500,31 @@ eventRoutes.post("/attendees/public-register", async (req, res, next) => {
           paymentProof,
           customFields: input.customFields
         }),
-        slug
+        slug,
+        req.user?.id || null
       ]
     );
+
+    // If logged in, update cross-syncable profile_data
+    if (req.user?.id && Object.keys(input.customFields).length > 0) {
+      const formFieldsRes = await query("SELECT field_key FROM registration_form_fields WHERE event_slug = $1 AND cross_syncable = TRUE", [slug]);
+      const syncableKeys = formFieldsRes.rows.map(row => row.field_key);
+      
+      const newProfileData = {};
+      for (const key of syncableKeys) {
+        if (input.customFields[key] !== undefined) {
+          newProfileData[key] = input.customFields[key];
+        }
+      }
+
+      if (Object.keys(newProfileData).length > 0) {
+        await query(
+          "UPDATE users SET profile_data = profile_data || $1::jsonb WHERE id = $2",
+          [JSON.stringify(newProfileData), req.user.id]
+        );
+      }
+    }
+
     return res.status(201).json({ attendee: result.rows[0] });
   } catch (error) {
     return next(error);
@@ -862,6 +884,7 @@ eventRoutes.post("/imports/commit", requireAuth, requireAdmin, upload.single("fi
     const { slug } = req.params;
     const rows = parseExcel(req.file.buffer);
     const validRows = rows.filter((row) => row.errors.length === 0 && row.data);
+    const generatedCredentials = []; // To store email-password pairs for export
 
     const result = await withTransaction(async (client) => {
       const batch = await client.query(
@@ -873,23 +896,46 @@ eventRoutes.post("/imports/commit", requireAuth, requireAdmin, upload.single("fi
 
       for (const row of validRows) {
         const data = row.data;
+        
+        // Ensure user account exists
+        let userId = null;
+        const userCheck = await client.query("SELECT id FROM users WHERE email = $1", [data.email]);
+        
+        if (userCheck.rows[0]) {
+          userId = userCheck.rows[0].id;
+        } else {
+          // Generate an 8 character random password
+          const plainPassword = Math.random().toString(36).slice(-8);
+          const hash = await bcrypt.hash(plainPassword, 10);
+          
+          const userInsert = await client.query(
+            `INSERT INTO users (name, email, password_hash, role)
+             VALUES ($1, $2, $3, 'participant')
+             RETURNING id`,
+            [data.name, data.email, hash]
+          );
+          userId = userInsert.rows[0].id;
+          generatedCredentials.push({ email: data.email, name: data.name, password: plainPassword });
+        }
+
         await client.query(
-          `INSERT INTO attendees (external_ref, name, email, phone, college, department, metadata, event_slug)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          `INSERT INTO attendees (external_ref, name, email, phone, college, department, metadata, event_slug, user_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            ON CONFLICT (email, event_slug) DO UPDATE
            SET name = EXCLUDED.name,
                phone = EXCLUDED.phone,
                college = EXCLUDED.college,
                department = EXCLUDED.department,
+               user_id = EXCLUDED.user_id,
                updated_at = now()`,
-          [data.externalRef, data.name, data.email, data.phone, data.college, data.department, { importBatchId: batch.rows[0].id }, slug]
+          [data.externalRef, data.name, data.email, data.phone, data.college, data.department, { importBatchId: batch.rows[0].id }, slug, userId]
         );
       }
 
       return batch.rows[0];
     });
 
-    res.status(201).json({ batch: result, preview: rows });
+    res.status(201).json({ batch: result, preview: rows, credentials: generatedCredentials });
   } catch (error) {
     next(error);
   }

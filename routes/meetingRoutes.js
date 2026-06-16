@@ -29,7 +29,7 @@ meetingRoutes.get("/", requireAuth, async (req, res, next) => {
 // Create a new meeting
 meetingRoutes.post("/", requireAuth, async (req, res, next) => {
   try {
-    const { title, date, time, department, location } = req.body;
+    const { title, date, time, department, location, event_id } = req.body;
     
     if (!title || !date || !time) {
       return res.status(400).json({ error: "missing_fields", message: "Title, date, and time are required." });
@@ -38,10 +38,10 @@ meetingRoutes.post("/", requireAuth, async (req, res, next) => {
     const userId = req.user?.id || null;
 
     const meetingRes = await query(`
-      INSERT INTO meetings (title, date, time, department, location, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO meetings (title, date, time, department, location, event_id, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING *
-    `, [title, date, time, department || 'all', location || '', userId]);
+    `, [title, date, time, department || 'all', location || '', event_id || null, userId]);
 
     res.status(201).json({ 
       success: true, 
@@ -56,7 +56,7 @@ meetingRoutes.post("/", requireAuth, async (req, res, next) => {
 meetingRoutes.put("/:id", requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { title, date, time, department, location } = req.body;
+    const { title, date, time, department, location, event_id } = req.body;
 
     const meetRes = await query(`SELECT * FROM meetings WHERE id = $1`, [id]);
     if (meetRes.rows.length === 0) return res.status(404).json({ error: "not_found", message: "Meeting not found." });
@@ -74,9 +74,10 @@ meetingRoutes.put("/:id", requireAuth, async (req, res, next) => {
           time = COALESCE($3, time),
           department = COALESCE($4, department),
           location = COALESCE($5, location),
+          event_id = COALESCE($6, event_id),
           updated_at = CURRENT_TIMESTAMP
-      WHERE id = $6 RETURNING *
-    `, [title, date, time, department, location, id]);
+      WHERE id = $7 RETURNING *
+    `, [title, date, time, department, location, event_id, id]);
 
     res.json({ success: true, meeting: { ...updateRes.rows[0], created_by_name: req.user?.name || req.user?.username } });
   } catch (error) {
