@@ -18,7 +18,8 @@ import { recruitmentsRoutes } from "./routes/recruitmentsRoutes.js";
 import { participantAuthRoutes } from "./routes/participantAuthRoutes.js";
 import { teamRoutes } from "./routes/teamRoutes.js";
 import { financeRoutes } from "./routes/financeRoutes.js";
-
+import { blogRoutes } from "./routes/blogRoutes.js";
+import { writeupRoutes } from "./routes/writeupRoutes.js";
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -141,9 +142,9 @@ app.use("/api/certificates", certificateRoutes);
 
 // Hall of Fame Routes
 app.use("/api/hall-of-fame", hallOfFameRoutes);
-
-// Recruitments Public Routes
 app.use("/api/recruitments", recruitmentsRoutes);
+app.use("/api/blogs", blogRoutes);
+app.use("/api/writeups", writeupRoutes);
 
 // In-memory mock database cache with seeder defaults
 let projectsDb = [
