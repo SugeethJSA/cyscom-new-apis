@@ -81,9 +81,15 @@ router.get("/me", requireAuth, async (req, res, next) => {
       [userId]
     );
 
+    const recruitmentsResult = await query(
+      `SELECT * FROM recruitments WHERE email = $1 ORDER BY created_at DESC`,
+      [userResult.rows[0].email]
+    );
+
     res.json({
       user: userResult.rows[0],
-      registrations: attendeesResult.rows
+      registrations: attendeesResult.rows,
+      recruitments: recruitmentsResult.rows
     });
   } catch (error) {
     next(error);
