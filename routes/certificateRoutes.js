@@ -17,6 +17,7 @@ router.get("/", async (req, res, next) => {
       LEFT JOIN team_members tm ON tm.team_id = t.id AND tm.user_id = c.user_id
     `;
 
+    let result;
     if (cert_id) {
       result = await query(`${baseQuery} WHERE c.id = $1`, [cert_id]);
     } else if (user_id) {

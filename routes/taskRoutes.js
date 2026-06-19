@@ -120,7 +120,17 @@ taskRoutes.put("/:id/status", requireAuth, async (req, res, next) => {
     if (status === 'completed') {
       const points = updatedTask.points_reward;
       for (const assignee of assignmentsRes.rows) {
+        // Update global user points
         await query(`UPDATE users SET points = points + $1 WHERE id = $2`, [points, assignee.user_id]);
+        
+        // Update current act leaderboard (defaulting to Act 8 for the current season)
+        await query(`
+          INSERT INTO leaderboard (user_id, act_num, points, rating)
+          VALUES ($2, 8, $1, $1)
+          ON CONFLICT (user_id, act_num) DO UPDATE 
+          SET points = leaderboard.points + EXCLUDED.points, 
+              rating = leaderboard.rating + EXCLUDED.rating
+        `, [points, assignee.user_id]);
       }
     }
 

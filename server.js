@@ -387,67 +387,12 @@ app.put("/api/auth/me/password", requireAuth, async (req, res, next) => {
   }
 });
 
-// Helper to push update to remote Firebase database if configured
-const syncToFirebase = async (node, data) => {
-  const fbUrl = process.env.FIREBASE_DB_URL;
-  if (!fbUrl) return;
-
-  try {
-    const cleanUrl = fbUrl.replace(/\/$/, "");
-    await fetch(`${cleanUrl}/vitcc/owasp/${node}.json`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data)
-    });
-  } catch (err) {
-    console.error(`Firebase API proxy sync failed for ${node}:`, err.message);
-  }
-};
-
-// Sync memory cache from remote Firebase database on startup if configured
-const initFromFirebase = async () => {
-  const fbUrl = process.env.FIREBASE_DB_URL;
-  if (!fbUrl) {
-    console.log("No FIREBASE_DB_URL configured. Using seeded default dataset.");
-    return;
-  }
-
-  try {
-    const cleanUrl = fbUrl.replace(/\/$/, "");
-    console.log(`Synchronizing cache from Firebase: ${cleanUrl}/vitcc/owasp.json ...`);
-    const res = await fetch(`${cleanUrl}/vitcc/owasp.json`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data) {
-        if (data.projects) projectsDb = data.projects;
-        if (data.hall_of_fame) hallOfFameDb = data.hall_of_fame;
-        if (data.legacy) legacyDb = data.legacy;
-        if (data.admin_users) adminUsersDb = data.admin_users;
-        if (data.templates) templatesDb = data.templates;
-        if (data.certificates) certificatesDb = data.certificates;
-        
-        // Extract leaderboard acts
-        Object.keys(data).forEach(key => {
-          if (key.startsWith("leaderboard-act")) {
-            leaderboardDb[key] = data[key];
-          }
-        });
-        console.log("Database cache fully synchronized from Firebase!");
-      }
-    } else {
-      console.warn(`Firebase response not OK (${res.status}). Using seeded defaults.`);
-    }
-  } catch (err) {
-    console.error("Failed to sync cache from Firebase on startup:", err.message);
-  }
-};
-
 // Root Health Endpoint
 app.get("/health", (req, res) => {
   res.json({
     status: "online",
     timestamp: new Date().toISOString(),
-    firebase_proxy: !!process.env.FIREBASE_DB_URL
+    postgres_connected: !!pool
   });
 });
 
@@ -458,7 +403,7 @@ app.get("/api/templates", (req, res) => {
 
 app.put("/api/templates", requireAuth, requireHubAccess('opensrc', 'certificates'), async (req, res) => {
   templatesDb = req.body;
-  await syncToFirebase("templates", templatesDb);
+
   res.json({ success: true, templates: templatesDb });
 });
 
@@ -469,7 +414,7 @@ app.get("/api/certificates", (req, res) => {
 
 app.put("/api/certificates", requireAuth, requireHubAccess('opensrc', 'certificates'), async (req, res) => {
   certificatesDb = req.body;
-  await syncToFirebase("certificates", certificatesDb);
+
   res.json({ success: true, certificates: certificatesDb });
 });
 
@@ -485,7 +430,7 @@ app.post("/api/projects", requireAuth, requireHubAccess('opensrc', 'projects'), 
   }
   projectsDb = projectsDb.filter(p => p.name !== project.name);
   projectsDb.push(project);
-  await syncToFirebase("projects", projectsDb);
+
   res.status(201).json(project);
 });
 
@@ -494,14 +439,14 @@ app.put("/api/projects", requireAuth, requireHubAccess('opensrc', 'projects'), a
     return res.status(400).json({ error: "Expected an array of projects." });
   }
   projectsDb = req.body;
-  await syncToFirebase("projects", projectsDb);
+
   res.json({ success: true, projects: projectsDb });
 });
 
 app.delete("/api/projects/:name", requireAuth, requireHubAccess('opensrc', 'projects'), async (req, res) => {
   const { name } = req.params;
   projectsDb = projectsDb.filter(p => p.name !== name);
-  await syncToFirebase("projects", projectsDb);
+
   res.json({ success: true, message: `Project ${name} deleted.` });
 });
 
@@ -517,7 +462,7 @@ app.post("/api/hall-of-fame", requireAuth, requireHubAccess('opensrc', 'hall_of_
   }
   hallOfFameDb = hallOfFameDb.filter(e => e.eventName !== event.eventName);
   hallOfFameDb.push(event);
-  await syncToFirebase("hall_of_fame", hallOfFameDb);
+
   res.status(201).json(event);
 });
 
@@ -526,14 +471,14 @@ app.put("/api/hall-of-fame", requireAuth, requireHubAccess('opensrc', 'hall_of_f
     return res.status(400).json({ error: "Expected an array of events." });
   }
   hallOfFameDb = req.body;
-  await syncToFirebase("hall_of_fame", hallOfFameDb);
+
   res.json({ success: true, hall_of_fame: hallOfFameDb });
 });
 
 app.delete("/api/hall-of-fame/:name", requireAuth, requireHubAccess('opensrc', 'hall_of_fame'), async (req, res) => {
   const { name } = req.params;
   hallOfFameDb = hallOfFameDb.filter(e => e.eventName !== name);
-  await syncToFirebase("hall_of_fame", hallOfFameDb);
+
   res.json({ success: true, message: `Event ${name} deleted.` });
 });
 
@@ -549,7 +494,7 @@ app.post("/api/legacy", requireAuth, requireHubAccess('opensrc', 'legacy'), asyn
   }
   legacyDb = legacyDb.filter(m => m.name !== member.name);
   legacyDb.push(member);
-  await syncToFirebase("legacy", legacyDb);
+
   res.status(201).json(member);
 });
 
@@ -558,14 +503,14 @@ app.put("/api/legacy", requireAuth, requireHubAccess('opensrc', 'legacy'), async
     return res.status(400).json({ error: "Expected an array of members." });
   }
   legacyDb = req.body;
-  await syncToFirebase("legacy", legacyDb);
+
   res.json({ success: true, legacy: legacyDb });
 });
 
 app.delete("/api/legacy/:name", requireAuth, requireHubAccess('opensrc', 'legacy'), async (req, res) => {
   const { name } = req.params;
   legacyDb = legacyDb.filter(m => m.name !== name);
-  await syncToFirebase("legacy", legacyDb);
+
   res.json({ success: true, message: `Legacy member ${name} deleted.` });
 });
 
@@ -801,25 +746,20 @@ app.put("/api/leaderboard-act/:actNum", async (req, res, next) => {
       }
     }
     
-    // Proxy to Firebase if configured
-    const fbUrl = process.env.FIREBASE_DB_URL;
-    if (fbUrl) {
-      try {
-        const cleanUrl = fbUrl.replace(/\/$/, "");
-        await fetch(`${cleanUrl}/vitcc/owasp/leaderboard-act${actNum}.json`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(rawMembers)
-        });
-      } catch (err) {
-        console.error(`Firebase Leaderboard sync failed for Act ${actNum}:`, err.message);
-      }
-    }
-    
+
     res.json({ success: true, act: actNum });
   } catch (err) {
     next(err);
   }
+});
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+  console.error("API Error:", err);
+  res.status(err.status || 500).json({
+    error: err.name || "InternalServerError",
+    message: err.message || "An unexpected error occurred."
+  });
 });
 
 // Start Express Listener
@@ -829,5 +769,4 @@ app.listen(PORT, async () => {
   console.log(` Access endpoints at http://localhost:${PORT}/api/...`);
   console.log(`===================================================`);
   await runMigrations();
-  await initFromFirebase();
 });
