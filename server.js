@@ -4,6 +4,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
+import swaggerUi from "swagger-ui-express";
+import fs from "fs";
 import { runMigrations, query } from "./db.js";
 import { eventRoutes } from "./routes/eventRoutes.js";
 import { intakeRoutes } from "./routes/intakeRoutes.js";
@@ -28,11 +30,19 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(path.join(__dirname, "public"), { index: false }));
 
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
-});
+try {
+  const swaggerDocument = JSON.parse(fs.readFileSync(path.join(__dirname, "swagger-output.json"), "utf8"));
+  app.use("/", swaggerUi.serve);
+  app.get("/", swaggerUi.setup(swaggerDocument, {
+    customCss: '.swagger-ui .topbar { display: none }',
+    customSiteTitle: "CySCOM API Docs"
+  }));
+} catch (err) {
+  console.log("Swagger docs not generated. Run 'npm run swagger' first.");
+  app.get("/", (req, res) => res.send("CySCOM API Server. Swagger docs pending."));
+}
 
 app.use(cors({
   origin: "*",
