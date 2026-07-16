@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CYSCOM OpenSrc API Documentation</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body {
+            box-sizing: border-box;
+            min-width: 200px;
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 45px;
+            background-color: #0d1117;
+        }
+        .markdown-body {
+            background-color: #0d1117;
+            color: #c9d1d9;
+        }
+    </style>
+</head>
+<body class="markdown-body">
+    <div id="content"></div>
+    <script type="text/markdown" id="markdown-content">
+# CYSCOM OpenSrc API Gateway
+
+Welcome to the CYSCOM OpenSrc REST API. This is the central backend engine that serves the Admin Portal (`cyscom-new-members`) and the Public Events Portal (`cyscom-events-hub`).
+
+## Core Endpoints Overview
+
+The API operates over `http://localhost:5000/api` natively, though in production it will be assigned a permanent domain.
+All protected routes require a JSON Web Token (JWT) provided in the `Authorization` header as a Bearer token.
+
+---
+
+### System Health
+**`GET /health`**
+- Returns the current operational status of the server and the availability of the Firebase DB proxy.
+
+---
+
+### Authentication & Users
+**`POST /api/auth/login`**
+- **Body**: `{ "username": "email@example.com", "password": "yourpassword" }`
+- **Description**: Authenticates users against the DB and returns a JWT along with user permissions. Handles both Admin (global) and Participant (event-scoped) users.
+
+**`PUT /api/auth/me/password`**
+- **Body**: `{ "newPassword": "str" }`
+- **Description**: Updates the authenticated user's password.
+
+**`GET /api/users/manage`**
+- **Headers**: `Authorization: Bearer <token>`
+- **Permissions**: `superadmin`
+- **Description**: Fetches all registered internal users, along with their roles and user group assignments.
+
+**`POST /api/users/manage`**
+- **Description**: Superadmin endpoint to provision a new user account.
+
+**`GET /api/user-groups`**
+- **Description**: Lists all user groups and their associated JSON permission trees.
+
+---
+
+### Events Suite
+**`GET /api/events?public=true`**
+- **Description**: Lists all events. Pass `?public=true` to fetch only published events for the public hub.
+
+**`POST /api/events`**
+- **Description**: Creates a new event. Requires a unique `slug` and `name`.
+
+**`PUT /api/events/:slug`**
+- **Description**: Updates an event's branding, dates, or visibility status.
+
+---
+
+### Intake & Registration
+**`POST /api/intake/register`**
+- **Body**: `{ "event_slug": "str", "participant_data": {} }`
+- **Description**: Dynamically validates `participant_data` against the event's custom JSON schema. If valid, generates an AES-256 encrypted QR ticket and logs the attendee as `Pending`.
+
+---
+
+### Checkpoint Scanner
+**`POST /api/scanner/verify`**
+- **Body**: `{ "encrypted_payload": "hex_string", "event_slug": "str" }`
+- **Description**: Takes a raw scanned QR payload from the physical scanner workstation. Decrypts it and verifies the participant's eligibility.
+
+**`POST /api/scanner/checkin`**
+- **Description**: Marks the verified participant as `Attended` and timestamps their log.
+
+---
+
+### Financials & Budgets
+**`GET /api/finances/budgets/:slug`**
+- **Description**: Fetches all draft budgets for a specific event.
+
+**`POST /api/finances/budgets`**
+- **Description**: Creates a new draft budget.
+
+**`POST /api/finances/budgets/:id/duplicate`**
+- **Description**: Clones an entire draft budget and all of its line-item estimates.
+
+**`POST /api/finances/sponsorships`**
+- **Description**: Logs inbound sponsorship revenue against a draft budget.
+
+**`POST /api/finances/bills/transfer`**
+- **Body**: `{ "bill_ids": [1, 2], "target_budget_id": 5 }`
+- **Description**: Moves logged expenditures between draft budgets.
+
+---
+
+### Certificates & Hall of Fame
+**`GET /api/certificates`**
+- **Description**: Lists all awarded certificates across all events.
+
+**`GET /api/hall-of-fame`**
+- **Description**: Lists hackathon winners and notable achievements.
+
+---
+
+_This documentation is auto-served from the API root. To update this document, modify `public/index.html` in the `cyscom-opensrc-api` repository._
+    </script>
+    <script>
+        document.getElementById('content').innerHTML = marked.parse(document.getElementById('markdown-content').innerHTML);
+    </script>
+</body>
+</html>
