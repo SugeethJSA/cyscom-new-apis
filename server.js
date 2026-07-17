@@ -59,94 +59,11 @@ app.get("/api/events", async (req, res, next) => {
   }
 });
 
-app.post("/api/events", requireAuth, requireHubAccess('members', 'events'), async (req, res, next) => {
-  try {
-    const { slug, name, description, banner_url, logo_url, start_date, end_date, status, is_public } = req.body;
-    if (!slug || !name) {
-      return res.status(400).json({ error: "missing_fields", message: "slug and name are required." });
-    }
-    const result = await query(
-      `INSERT INTO events (slug, name, description, banner_url, logo_url, start_date, end_date, status, is_public)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [slug.toLowerCase().replace(/[^a-z0-9-]/g, ""), name, description || null, banner_url || null, logo_url || null, start_date || null, end_date || null, status || "active", is_public || false]
-    );
-    res.status(201).json({ event: result.rows[0] });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.put("/api/events/:slug", requireAuth, requireHubAccess('members', 'events'), async (req, res, next) => {
-  try {
-    const { slug } = req.params;
-    const { name, description, banner_url, logo_url, start_date, end_date, status, is_public } = req.body;
-    const result = await query(
-      `UPDATE events
-          SET name = COALESCE($2, name),
-              description = $3,
-              banner_url = $4,
-              logo_url = $5,
-              start_date = $6,
-              end_date = $7,
-              status = COALESCE($8, status),
-              is_public = COALESCE($9, is_public),
-              updated_at = now()
-        WHERE slug = $1
-        RETURNING *`,
-      [slug, name, description || null, banner_url || null, logo_url || null, start_date || null, end_date || null, status || null, is_public]
-    );
-    if (!result.rows[0]) {
-      return res.status(404).json({ error: "not_found", message: `Event ${slug} not found.` });
-    }
-    res.json({ event: result.rows[0] });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.delete("/api/events/:slug", requireAuth, requireHubAccess('members', 'events'), async (req, res, next) => {
-  try {
-    const { slug } = req.params;
-    const result = await query("DELETE FROM events WHERE slug = $1 RETURNING id", [slug]);
-    if (!result.rows[0]) {
-      return res.status(404).json({ error: "not_found", message: `Event ${slug} not found.` });
-    }
-    res.status(204).send();
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.use("/api/finances", financeRoutes);
-app.use("/api/teams", teamRoutes);
 app.use("/api/events/:slug", eventRoutes);
 app.use("/api/auth/participant", participantAuthRoutes);
-
-// Intake Routes
-app.use("/api/intake", intakeRoutes);
-
-// Task Routes
-app.use("/api/tasks", taskRoutes);
-
-// Meeting Routes
-app.use("/api/meetings", meetingRoutes);
-
-// Resource Routes
-app.use("/api/resources", resourceRoutes);
-
-// Project Routes
-app.use("/api/projects", projectRoutes);
-
-// Certificate Routes
-app.use("/api/certificates", certificateRoutes);
-
-// Hall of Fame Routes
-app.use("/api/hall-of-fame", hallOfFameRoutes);
 app.use("/api/recruitments", recruitmentsRoutes);
 app.use("/api/blogs", blogRoutes);
 app.use("/api/writeups", writeupRoutes);
-app.use("/api/transfers", transferRoutes);
 
 // In-memory mock database cache with seeder defaults
 let projectsDb = [
@@ -165,29 +82,6 @@ let projectsDb = [
     stars: 9,
     forks: 3,
     github: "https://github.com/SugeethJSA/cyscom-new-blog"
-  }
-];
-
-let hallOfFameDb = [
-  {
-    eventName: "Star Wars Hackathon 2024",
-    category: "Hackathons",
-    altHeading: "Jedi Quest Coding Challenge",
-    winners: [
-      { rank: "1st Place 🥇", team: "Dark Side Devs", members: ["Anirudh CV", "Aditya V"] },
-      { rank: "2nd Place 🥈", team: "Rebel Coder Alliance", members: ["Pranav Shah", "Sneha Sen"] }
-    ],
-    jediList: ["Vatz", "Saikiran S"]
-  }
-];
-
-let legacyDb = [
-  {
-    name: "Sugeeth JSA",
-    post: "Cabinet Head & Lead Developer",
-    github: "https://github.com/SugeethJSA",
-    linkedin: "https://www.linkedin.com/in/sugeethjsa",
-    pic: "/img/logo.png"
   }
 ];
 
@@ -241,7 +135,7 @@ app.post("/api/auth/login", async (req, res, next) => {
     // 1. Check in-memory global admin database
     const matchedGlobal = adminUsersDb.find(u => u.username.toLowerCase() === username.trim().toLowerCase());
     if (matchedGlobal) {
-      // In CySCOM Admin, global admin passwords are SHA-256 hashed client-side.
+      // The current admin portal - global admin passwords are SHA-256 hashed client-side.
       // To support unified logins securely, we accept both client-side hashed or plaintext keys.
       const crypto = await import("crypto");
       const enteredHash = crypto.createHash("sha256").update(password).digest("hex");
@@ -320,6 +214,7 @@ app.post("/api/auth/login", async (req, res, next) => {
             global: false
           };
           
+          // SugeethJSA review: We may need to look at the QR code auth mechanism.
           let qrDecryptKey = "Q1lTQ09NX09XQVNQX1NFQ1JFVF9LRVlfMjAyNg==";
           try {
             const { exportQrDecryptKey } = await import("./services/crypto.js");
@@ -409,111 +304,9 @@ app.put("/api/templates", requireAuth, requireHubAccess('opensrc', 'certificates
   res.json({ success: true, templates: templatesDb });
 });
 
-// CERTIFICATES REGISTRY ENDPOINTS
-app.get("/api/certificates", (req, res) => {
-  res.json(certificatesDb);
-});
-
-app.put("/api/certificates", requireAuth, requireHubAccess('opensrc', 'certificates'), async (req, res) => {
-  certificatesDb = req.body;
-
-  res.json({ success: true, certificates: certificatesDb });
-});
-
 // PROJECTS CRUD
 app.get("/api/projects", (req, res) => {
   res.json(projectsDb);
-});
-
-app.post("/api/projects", requireAuth, requireHubAccess('opensrc', 'projects'), async (req, res) => {
-  const project = req.body;
-  if (!project.name) {
-    return res.status(400).json({ error: "Missing project name." });
-  }
-  projectsDb = projectsDb.filter(p => p.name !== project.name);
-  projectsDb.push(project);
-
-  res.status(201).json(project);
-});
-
-app.put("/api/projects", requireAuth, requireHubAccess('opensrc', 'projects'), async (req, res) => {
-  if (!Array.isArray(req.body)) {
-    return res.status(400).json({ error: "Expected an array of projects." });
-  }
-  projectsDb = req.body;
-
-  res.json({ success: true, projects: projectsDb });
-});
-
-app.delete("/api/projects/:name", requireAuth, requireHubAccess('opensrc', 'projects'), async (req, res) => {
-  const { name } = req.params;
-  projectsDb = projectsDb.filter(p => p.name !== name);
-
-  res.json({ success: true, message: `Project ${name} deleted.` });
-});
-
-// HALL OF FAME CRUD
-app.get("/api/hall-of-fame", (req, res) => {
-  res.json(hallOfFameDb);
-});
-
-app.post("/api/hall-of-fame", requireAuth, requireHubAccess('opensrc', 'hall_of_fame'), async (req, res) => {
-  const event = req.body;
-  if (!event.eventName) {
-    return res.status(400).json({ error: "Missing event name." });
-  }
-  hallOfFameDb = hallOfFameDb.filter(e => e.eventName !== event.eventName);
-  hallOfFameDb.push(event);
-
-  res.status(201).json(event);
-});
-
-app.put("/api/hall-of-fame", requireAuth, requireHubAccess('opensrc', 'hall_of_fame'), async (req, res) => {
-  if (!Array.isArray(req.body)) {
-    return res.status(400).json({ error: "Expected an array of events." });
-  }
-  hallOfFameDb = req.body;
-
-  res.json({ success: true, hall_of_fame: hallOfFameDb });
-});
-
-app.delete("/api/hall-of-fame/:name", requireAuth, requireHubAccess('opensrc', 'hall_of_fame'), async (req, res) => {
-  const { name } = req.params;
-  hallOfFameDb = hallOfFameDb.filter(e => e.eventName !== name);
-
-  res.json({ success: true, message: `Event ${name} deleted.` });
-});
-
-// LEGACY MEMBERS CRUD
-app.get("/api/legacy", (req, res) => {
-  res.json(legacyDb);
-});
-
-app.post("/api/legacy", requireAuth, requireHubAccess('opensrc', 'legacy'), async (req, res) => {
-  const member = req.body;
-  if (!member.name) {
-    return res.status(400).json({ error: "Missing member name." });
-  }
-  legacyDb = legacyDb.filter(m => m.name !== member.name);
-  legacyDb.push(member);
-
-  res.status(201).json(member);
-});
-
-app.put("/api/legacy", requireAuth, requireHubAccess('opensrc', 'legacy'), async (req, res) => {
-  if (!Array.isArray(req.body)) {
-    return res.status(400).json({ error: "Expected an array of members." });
-  }
-  legacyDb = req.body;
-
-  res.json({ success: true, legacy: legacyDb });
-});
-
-app.delete("/api/legacy/:name", requireAuth, requireHubAccess('opensrc', 'legacy'), async (req, res) => {
-  const { name } = req.params;
-  legacyDb = legacyDb.filter(m => m.name !== name);
-
-  res.json({ success: true, message: `Legacy member ${name} deleted.` });
 });
 
 // USER GROUPS CRUD
