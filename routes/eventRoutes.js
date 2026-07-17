@@ -373,8 +373,6 @@ eventRoutes.post("/attendees/import", requireAuth, async (req, res, next) => {
 
     const generatedCredentials = [];
     
-    // Process attendees in a transaction
-    const { withTransaction } = await import("../db.js");
     await withTransaction(async (client) => {
       for (const att of attendees) {
         if (!att.email) continue;
@@ -1113,7 +1111,7 @@ eventRoutes.post("/scans/sync", requireAuth, async (req, res, next) => {
         }
 
         if (scan.station === "kit") {
-          const limitRes = await client.query("SELECT setting_value FROM system_settings WHERE event_slug = $2 AND setting_key = 'kit_limit'", [slug]);
+          const limitRes = await client.query("SELECT setting_value FROM system_settings WHERE event_slug = $1 AND setting_key = 'kit_limit'", [slug]);
           if (limitRes.rows[0]) {
             const limit = parseInt(limitRes.rows[0].setting_value, 10);
             if (!isNaN(limit)) {
