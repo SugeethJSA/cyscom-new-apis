@@ -13,7 +13,6 @@ import { recruitmentsRoutes } from "./routes/recruitmentsRoutes.js";
 import { participantAuthRoutes } from "./routes/participantAuthRoutes.js";
 import { blogRoutes } from "./routes/blogRoutes.js";
 import { writeupRoutes } from "./routes/writeupRoutes.js";
-import { transferRoutes } from "./routes/transferRoutes.js";
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
