@@ -8,18 +8,9 @@ import swaggerUi from "swagger-ui-express";
 import fs from "fs";
 import { runMigrations, query } from "./db.js";
 import { eventRoutes } from "./routes/eventRoutes.js";
-import { intakeRoutes } from "./routes/intakeRoutes.js";
-import { taskRoutes } from "./routes/taskRoutes.js";
-import { meetingRoutes } from "./routes/meetingRoutes.js";
-import { resourceRoutes } from "./routes/resourceRoutes.js";
-import { projectRoutes } from "./routes/projectRoutes.js";
-import { certificateRoutes } from "./routes/certificateRoutes.js";
-import { hallOfFameRoutes } from "./routes/hallOfFameRoutes.js";
 import { requireAuth, requireAdmin, requireSuperAdmin, requireHubAccess, signUser } from "./middleware/auth.js";
 import { recruitmentsRoutes } from "./routes/recruitmentsRoutes.js";
 import { participantAuthRoutes } from "./routes/participantAuthRoutes.js";
-import { teamRoutes } from "./routes/teamRoutes.js";
-import { financeRoutes } from "./routes/financeRoutes.js";
 import { blogRoutes } from "./routes/blogRoutes.js";
 import { writeupRoutes } from "./routes/writeupRoutes.js";
 import { transferRoutes } from "./routes/transferRoutes.js";
@@ -38,7 +29,7 @@ try {
   app.use("/", swaggerUi.serve);
   app.get("/", swaggerUi.setup(swaggerDocument, {
     customCss: '.swagger-ui .topbar { display: none }',
-    customSiteTitle: "CySCOM API Docs"
+    customSiteTitle: "CYSCOM API Docs"
   }));
 } catch (err) {
   console.log("Swagger docs not generated. Run 'npm run swagger' first.");
