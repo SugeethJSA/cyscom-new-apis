@@ -62,13 +62,3 @@ recruitmentsRoutes.post("/", async (req, res, next) => {
     next(error);
   }
 });
-
-// GET /api/recruitments (for admin view, just a basic unprotected version for testing, you might want to add requireAuth later)
-recruitmentsRoutes.get("/", async (req, res, next) => {
-  try {
-    const result = await query("SELECT * FROM recruitments ORDER BY created_at DESC");
-    res.json({ recruitments: result.rows });
-  } catch (error) {
-    next(error);
-  }
-});

@@ -53,32 +53,4 @@ router.post("/", requireAuth, requireHubAccess('members', 'blogs'), async (req, 
   }
 });
 
-// Update a blog (members only)
-router.put("/:slug", requireAuth, requireHubAccess('members', 'blogs'), async (req, res, next) => {
-  try {
-    const { slug } = req.params;
-    const { title, cover_image_url, author, content_markdown, tags, published_at } = req.body;
-
-    const result = await query(
-      `UPDATE blogs
-       SET title = COALESCE($2, title),
-           cover_image_url = $3,
-           author = COALESCE($4, author),
-           content_markdown = COALESCE($5, content_markdown),
-           tags = COALESCE($6, tags),
-           published_at = $7
-       WHERE slug = $1
-       RETURNING *`,
-      [slug, title, cover_image_url, author, content_markdown, tags, published_at]
-    );
-
-    if (!result.rows[0]) {
-      return res.status(404).json({ error: "not_found", message: "Blog not found." });
-    }
-    res.json({ blog: result.rows[0] });
-  } catch (error) {
-    next(error);
-  }
-});
-
 export { router as blogRoutes };

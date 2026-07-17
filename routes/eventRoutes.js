@@ -29,34 +29,6 @@ eventRoutes.get("/", async (req, res, next) => {
   }
 });
 
-// AUTH/ADMIN: Update Event Branding & Info
-eventRoutes.put("/", requireAuth, requireAdmin, async (req, res, next) => {
-  try {
-    const { slug } = req.params;
-    const { name, description, logo_url, banner_url } = req.body;
-    
-    if (!name) {
-      return res.status(400).json({ error: "missing_fields", message: "Event Display Title is required." });
-    }
-
-    const result = await query(
-      `UPDATE events 
-       SET name = $1, description = $2, logo_url = $3, banner_url = $4, updated_at = CURRENT_TIMESTAMP
-       WHERE slug = $5
-       RETURNING *`,
-      [name, description || null, logo_url || null, banner_url || null, slug]
-    );
-
-    if (!result.rows[0]) {
-      return res.status(404).json({ error: "not_found", message: "Event not found." });
-    }
-
-    res.json({ event: result.rows[0], message: "Event updated successfully." });
-  } catch (error) {
-    next(error);
-  }
-});
-
 // AUTH: Login scoped per event
 eventRoutes.post("/auth/login", async (req, res, next) => {
   try {
@@ -217,32 +189,6 @@ eventRoutes.delete("/categories/:id", requireAuth, requireAdmin, async (req, res
   }
 });
 
-// SETTINGS per event
-eventRoutes.get("/settings/public", async (req, res, next) => {
-  try {
-    const { slug } = req.params;
-    const result = await query(
-      "SELECT setting_key, setting_value FROM system_settings WHERE event_slug = $1",
-      [slug]
-    );
-    const settings = result.rows.reduce((acc, row) => {
-      acc[row.setting_key] = row.setting_value;
-      return acc;
-    }, {});
-    
-    // Inject event details into public settings automatically
-    const eventRes = await query("SELECT name, description, banner_url, logo_url FROM events WHERE slug = $1", [slug]);
-    if (eventRes.rows[0]) {
-      settings.event_name = eventRes.rows[0].name;
-      settings.logo_url = eventRes.rows[0].logo_url || settings.logo_url;
-    }
-
-    res.json({ settings });
-  } catch (error) {
-    next(error);
-  }
-});
-
 eventRoutes.get("/settings", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const { slug } = req.params;
@@ -312,55 +258,7 @@ eventRoutes.get("/attendees", requireAuth, async (req, res, next) => {
   }
 });
 
-eventRoutes.get("/attendees/export", requireAuth, async (req, res, next) => {
-  try {
-    const { slug } = req.params;
-    const result = await query(
-      `SELECT id,
-              external_ref AS "externalRef",
-              name,
-              email,
-              phone,
-              college,
-              department,
-              metadata,
-              registered_on_spot AS "registeredOnSpot",
-              created_at AS "createdAt"
-         FROM attendees
-        WHERE event_slug = $1
-        ORDER BY created_at ASC`,
-      [slug]
-    );
 
-    const data = result.rows.map((row) => {
-      const customFields = row.metadata?.customFields || {};
-      return {
-        ID: row.id,
-        "External Ref": row.externalRef,
-        Name: row.name,
-        Email: row.email,
-        Phone: row.phone,
-        College: row.college,
-        Department: row.department,
-        "On Spot": row.registeredOnSpot ? "Yes" : "No",
-        "Verification Status": row.metadata?.verificationStatus || "verified",
-        "Created At": row.createdAt,
-        ...customFields
-      };
-    });
-
-    const worksheet = xlsx.utils.json_to_sheet(data);
-    const workbook = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(workbook, worksheet, "Attendees");
-    const buffer = xlsx.write(workbook, { type: "buffer", bookType: "xlsx" });
-
-    res.setHeader("Content-Disposition", `attachment; filename="attendees_${slug}_export.xlsx"`);
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.send(buffer);
-  } catch (error) {
-    next(error);
-  }
-});
 
 eventRoutes.post("/attendees", requireAuth, async (req, res, next) => {
   try {
