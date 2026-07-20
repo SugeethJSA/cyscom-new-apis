@@ -11,14 +11,6 @@
     "https",
     "http"
   ],
-  "securityDefinitions": {
-    "bearerAuth": {
-      "type": "apiKey",
-      "name": "Authorization",
-      "in": "header",
-      "description": "Enter your bearer token in the format **Bearer <token>**"
-    }
-  },
   "paths": {
     "/": {
       "get": {
@@ -134,66 +126,6 @@
             "description": "OK"
           }
         }
-      },
-      "post": {
-        "description": "",
-        "parameters": [
-          {
-            "name": "slice(7",
-            "in": "header",
-            "type": "string"
-          },
-          {
-            "name": "body",
-            "in": "body",
-            "schema": {
-              "type": "object",
-              "properties": {
-                "title": {
-                  "example": "any"
-                },
-                "slug": {
-                  "example": "any"
-                },
-                "event_name": {
-                  "example": "any"
-                },
-                "cover_image_url": {
-                  "example": "any"
-                },
-                "author": {
-                  "example": "any"
-                },
-                "content_markdown": {
-                  "example": "any"
-                },
-                "tags": {
-                  "example": "any"
-                },
-                "published_at": {
-                  "example": "any"
-                }
-              }
-            }
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "Created"
-          },
-          "400": {
-            "description": "Bad Request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "409": {
-            "description": "Conflict"
-          }
-        }
       }
     },
     "/api/writeups/{slug}": {
@@ -210,66 +142,6 @@
         "responses": {
           "200": {
             "description": "OK"
-          },
-          "404": {
-            "description": "Not Found"
-          }
-        }
-      },
-      "put": {
-        "description": "",
-        "parameters": [
-          {
-            "name": "slug",
-            "in": "path",
-            "required": true,
-            "type": "string"
-          },
-          {
-            "name": "slice(7",
-            "in": "header",
-            "type": "string"
-          },
-          {
-            "name": "body",
-            "in": "body",
-            "schema": {
-              "type": "object",
-              "properties": {
-                "title": {
-                  "example": "any"
-                },
-                "event_name": {
-                  "example": "any"
-                },
-                "cover_image_url": {
-                  "example": "any"
-                },
-                "author": {
-                  "example": "any"
-                },
-                "content_markdown": {
-                  "example": "any"
-                },
-                "tags": {
-                  "example": "any"
-                },
-                "published_at": {
-                  "example": "any"
-                }
-              }
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Forbidden"
           },
           "404": {
             "description": "Not Found"
